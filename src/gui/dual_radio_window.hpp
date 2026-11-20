@@ -30,6 +30,8 @@ public:
 	void restoreLastSession();
 	void loadRadio(int side, const QString &firmware, const QString &dataBackup = QString(), uint32_t dmrId = 0);
 	void loadRadioFromPath(int side, const QString &firmware);
+	void hotloadRadio(int side, const QString &firmware);
+	void hotloadAll(const QString &firmware);
 
 protected:
 	void closeEvent(QCloseEvent *event) override;

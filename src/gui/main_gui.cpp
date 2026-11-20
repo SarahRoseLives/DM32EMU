@@ -21,6 +21,8 @@
 #include <QImage>
 #include <QKeySequence>
 #include <QLabel>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
@@ -43,8 +45,63 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace {
+
+QString hotloadSocketName()
+{
+	const QByteArray env = qgetenv("DM32EMU_HOTLOAD_SOCKET");
+	return env.isEmpty() ? QStringLiteral("dm32emu-hotload") : QString::fromLocal8Bit(env);
+}
+
+class HotloadServer {
+public:
+	using Handler = std::function<void(int side, const QString &path)>;
+
+	bool listen(QString &error)
+	{
+		const QString name = hotloadSocketName();
+		QLocalServer::removeServer(name);
+		if (!server_.listen(name)) {
+			error = server_.errorString();
+			return false;
+		}
+		QObject::connect(&server_, &QLocalServer::newConnection, [this] {
+			while (QLocalSocket *socket = server_.nextPendingConnection()) {
+				QObject::connect(socket, &QLocalSocket::readyRead, socket, [this, socket] {
+					QByteArray buffer = socket->property("hotload_buffer").toByteArray();
+					buffer += socket->readAll();
+					int newline;
+					while ((newline = buffer.indexOf('\n')) >= 0) {
+						const QByteArray line = buffer.left(newline);
+						buffer.remove(0, newline + 1);
+						handle(QString::fromUtf8(line));
+					}
+					socket->setProperty("hotload_buffer", buffer);
+				});
+				QObject::connect(socket, &QLocalSocket::disconnected, socket, &QObject::deleteLater);
+			}
+		});
+		return true;
+	}
+
+	Handler handler;
+
+private:
+	void handle(const QString &line)
+	{
+		const QStringList parts = line.split(QLatin1Char('\t'));
+		if (parts.size() < 2 || parts.at(0) != QStringLiteral("reload")) return;
+		int side = 2;
+		if (parts.at(1) == QStringLiteral("a")) side = 0;
+		else if (parts.at(1) == QStringLiteral("b")) side = 1;
+		const QString path = parts.value(2);
+		if (handler) handler(side, path);
+	}
+
+	QLocalServer server_;
+};
 
 struct SymTab {
 	std::vector<ElfSymbol> syms;
@@ -142,6 +199,7 @@ public:
 	explicit MainWindow(QWidget *parent = nullptr);
 
 	void loadFirmware(const QString &path);
+	void hotloadFirmware(const QString &path);
 	void setDataFlash(const QString &path) { data_flash_ = path; }
 	void setScreenshotMode(const QString &path, int frames);
 	void setWindowScreenshotMode(const QString &path, int frames);
@@ -513,6 +571,16 @@ void MainWindow::loadFirmware(const QString &path)
 	emulator_.start();
 }
 
+void MainWindow::hotloadFirmware(const QString &path)
+{
+	if (!path.isEmpty()) firmware_ = path;
+	if (firmware_.isEmpty()) {
+		statusBar()->showMessage(QStringLiteral("Hotload: no firmware loaded"), 5000);
+		return;
+	}
+	loadFirmware(firmware_);
+}
+
 void MainWindow::setScreenshotMode(const QString &path, int frames)
 {
 	screenshot_path_ = path;
@@ -830,6 +898,14 @@ int main(int argc, char **argv)
 	QCommandLineOption codec(QStringLiteral("codec"), QStringLiteral("Shared codec backup (program-memory.bin or ZIP)."), QStringLiteral("file"));
 	QCommandLineOption dmrIdA(QStringLiteral("dmr-id-a"), QStringLiteral("Radio A own DMR ID."), QStringLiteral("id"));
 	QCommandLineOption dmrIdB(QStringLiteral("dmr-id-b"), QStringLiteral("Radio B own DMR ID."), QStringLiteral("id"));
+	QCommandLineOption hotload(QStringLiteral("hotload"),
+				   QStringLiteral("Reload a firmware image in the running GUI (path may be empty to reload the current image)."),
+				   QStringLiteral("file"));
+	QCommandLineOption hotloadSide(QStringLiteral("hotload-side"),
+				       QStringLiteral("Radio to reload: a, b or both (default both)."),
+				       QStringLiteral("side"), QStringLiteral("both"));
+	QCommandLineOption hotloadCurrent(QStringLiteral("hotload-current"),
+					 QStringLiteral("Reload the current firmware of the running GUI."));
 	parser.addOption(dataFlash);
 	parser.addOption(screenshot);
 	parser.addOption(windowShot);
@@ -843,7 +919,54 @@ int main(int argc, char **argv)
 	parser.addOption(codec);
 	parser.addOption(dmrIdA);
 	parser.addOption(dmrIdB);
+	parser.addOption(hotload);
+	parser.addOption(hotloadSide);
+	parser.addOption(hotloadCurrent);
 	parser.process(app);
+
+	if (parser.isSet(hotload) || parser.isSet(hotloadCurrent)) {
+		QLocalSocket socket;
+		socket.connectToServer(hotloadSocketName());
+		if (!socket.waitForConnected(1000)) {
+			std::fprintf(stderr, "hotload: no running GUI at %s\n",
+				     hotloadSocketName().toLocal8Bit().constData());
+			return 1;
+		}
+		QString side = parser.value(hotloadSide).toLower();
+		if (side != QStringLiteral("a") && side != QStringLiteral("b")) side = QStringLiteral("both");
+		QByteArray path = parser.isSet(hotloadCurrent) ? QByteArray() : parser.value(hotload).toUtf8();
+		if (!path.isEmpty()) path = QFileInfo(parser.value(hotload)).absoluteFilePath().toUtf8();
+		QByteArray line = "reload\t" + side.toUtf8() + '\t' + path + '\n';
+		if (socket.write(line) != line.size()) {
+			std::fprintf(stderr, "hotload: could not send reload request: %s\n",
+				     socket.errorString().toLocal8Bit().constData());
+			return 1;
+		}
+		socket.flush();
+		socket.waitForBytesWritten(1000);
+		socket.disconnectFromServer();
+		socket.waitForDisconnected(1000);
+		return 0;
+	}
+
+	HotloadServer hotloadServer;
+	hotloadServer.handler = [](int side, const QString &path) {
+		for (QWidget *widget : QApplication::topLevelWidgets()) {
+			if (auto *dual = dynamic_cast<DualRadioWindow *>(widget)) {
+				if (side == 2) dual->hotloadAll(path);
+				else dual->hotloadRadio(side, path);
+				return;
+			}
+			if (auto *single = dynamic_cast<MainWindow *>(widget)) {
+				single->hotloadFirmware(path);
+				return;
+			}
+		}
+	};
+	QString hotloadError;
+	if (!hotloadServer.listen(hotloadError)) {
+		std::fprintf(stderr, "hotload: %s\n", hotloadError.toLocal8Bit().constData());
+	}
 
 	if (parser.isSet(dual)) {
 		auto *w = new DualRadioWindow;

@@ -295,6 +295,21 @@ void DualRadioWindow::loadRadioFromPath(int side, const QString &firmware)
 	reload(side);
 }
 
+void DualRadioWindow::hotloadRadio(int side, const QString &firmware)
+{
+	if (side < 0 || side > 1) return;
+	if (firmware.isEmpty()) {
+		reload(side);
+		return;
+	}
+	loadRadio(side, firmware, panes_[side].dataPath);
+}
+
+void DualRadioWindow::hotloadAll(const QString &firmware)
+{
+	for (int i = 0; i < 2; i++) hotloadRadio(i, firmware);
+}
+
 void DualRadioWindow::openFirmware(int side)
 {
 	QString dir = QDir::homePath();

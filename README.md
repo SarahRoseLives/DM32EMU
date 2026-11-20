@@ -28,9 +28,9 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ```
 
-This builds the command-line emulator `build/dm32emu`. If Qt6 Widgets is
-available, it also builds the GUI `build/dm32gui`. ZLIB is required for reading
-backup ZIPs. No C-SKY toolchain is needed at run time. An ELF is only used for
+This builds the command-line emulator `build/dm32emu`. If Qt6 Widgets and
+Network are available, it also builds the GUI `build/dm32gui`. ZLIB is required
+for reading backup ZIPs. No C-SKY toolchain is needed at run time. An ELF is only used for
 symbols; the emulator executes the application image itself.
 
 The build uses `-O3`, link-time optimization and, by default, `-march=native`.
@@ -125,6 +125,27 @@ register view about four times a second. **Emulator > Skip idle** is on by
 default and fast-forwards the FreeRTOS idle loop; turn it off when debugging
 idle, watchdog or timing-sensitive code.
 
+### Hot reload
+
+A running GUI listens on the local socket `dm32emu-hotload`. After rebuilding
+a firmware image, reload it without restarting the GUI:
+
+```sh
+# Reload the current image on both radios
+./build/dm32gui --hotload-current
+
+# Reload radio A with a new image
+./build/dm32gui --hotload /path/to/build/rfoundry_dm32.bin --hotload-side a
+
+# Reload radio B's current image
+./build/dm32gui --hotload-current --hotload-side b
+```
+
+`--hotload-side` is `a`, `b` or `both` (the default). The command connects to
+the running GUI, asks it to stop and reload that radio's emulator thread, and
+exits. Set `DM32EMU_HOTLOAD_SOCKET` for both the GUI and the command if you run
+more than one GUI instance.
+
 The Debugger dock has:
 
 | Tab | What it does |
@@ -199,6 +220,9 @@ that DMR timeslot to the IQ link.
 | `--data-backup FILE` | load `data-memory.bin`, `original-channels.bin` or a 0x120000 codeplug |
 | `--codec-backup FILE` | install the DMR codec from a 1 MB `program-memory.bin` or backup ZIP |
 | `--dmr-id ID` | override the codeplug's own DMR ID |
+| `--hotload FILE` | reload `FILE` in the running GUI |
+| `--hotload-current` | reload the running GUI's current firmware |
+| `--hotload-side a\|b\|both` | choose the radio to hot reload (default `both`) |
 | `--uart-pty` | bridge UART0 to a new PTY and print its path |
 | `--uart-tcp PORT` | bridge UART0 to `127.0.0.1:PORT` (`0` picks a free port) |
 | `--no-idle-skip` | do not fast-forward the FreeRTOS idle loop |
