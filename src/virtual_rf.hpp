@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <mutex>
 
 struct VirtualRfBurst {
@@ -22,6 +23,8 @@ struct VirtualRfBurst {
 // burst except the ones it sent.
 class VirtualRfBus {
 public:
+	void add_receiver(uint8_t id);
+	void remove_receiver(uint8_t id);
 	void send(const VirtualRfBurst &burst);
 	bool receive(uint8_t receiver, VirtualRfBurst &burst);
 	void clear();
@@ -37,7 +40,7 @@ public:
 private:
 	static constexpr size_t MAX_QUEUE = 256;
 	mutable std::mutex mutex_;
-	std::deque<VirtualRfBurst> queue_;
+	std::map<uint8_t, std::deque<VirtualRfBurst>> mailboxes_;
 	std::atomic<uint64_t> sent_{0};
 	std::atomic<uint64_t> delivered_{0};
 	std::atomic<uint64_t> dropped_{0};

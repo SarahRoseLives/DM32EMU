@@ -29,9 +29,13 @@ int main()
 	CHECK(machine.install_codec_slot(slot, err));
 	CHECK_EQ(machine.read32(Machine::FLASH_BASE + 0xE8000), 0x43524444u);
 
-	// Installing again is a no-op; the image already reports a slot.
+	// Installing again replaces the existing slot.
 	CHECK(machine.install_codec_slot(slot, err));
 	CHECK_EQ(machine.read32(Machine::FLASH_BASE + 0xE8000), 0x43524444u);
+
+	std::vector<uint8_t> bad(128, 0);
+	CHECK(!machine.install_codec_slot(bad, err));
+	CHECK(!err.empty());
 
 	const char *data_path = std::getenv("DM32EMU_TEST_DATA");
 	if (data_path != nullptr && *data_path != '\0') {

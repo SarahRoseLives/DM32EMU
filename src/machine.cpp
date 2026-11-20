@@ -89,7 +89,10 @@ Machine::Machine()
 	reset();
 }
 
-Machine::~Machine() = default;
+Machine::~Machine()
+{
+	if (rf_bus_) rf_bus_->remove_receiver(rf_id_);
+}
 
 void Machine::reset()
 {
@@ -207,13 +210,25 @@ bool Machine::install_codec_slot(const std::vector<uint8_t> &slot, std::string &
 {
 	constexpr uint32_t off = 0x000E8000u;
 	constexpr uint32_t room = 0x00018000u;
-	if (slot.size() > room) {
-		err = "codec slot is too large";
+	constexpr uint32_t magic = 0x43524444u;
+	if (slot.size() < 128 || slot.size() > room) {
+		err = "codec slot has an invalid size";
 		return false;
 	}
-	if (flash_.size() >= off + 4) {
-		const uint32_t magic = rd32le(flash_.data() + off);
-		if (magic == 0x43524444u) return true; // the image already has a slot
+	const uint32_t version = rd32le(slot.data() + 4);
+	const uint32_t code_off = rd32le(slot.data() + 8);
+	const uint32_t code_len = rd32le(slot.data() + 12);
+	const uint32_t tab_off = rd32le(slot.data() + 20);
+	const uint32_t tab_len = rd32le(slot.data() + 24);
+	const uint32_t tag = rd32le(slot.data() + 60);
+	const uint32_t rel_off = rd32le(slot.data() + 68);
+	const uint32_t rel_count = rd32le(slot.data() + 72);
+	if (rd32le(slot.data()) != magic || version != 2 || (tag != 46u && tag != 49u) ||
+	    code_off < 128 || code_len == 0 || (uint64_t)code_off + code_len > slot.size() ||
+	    tab_len == 0 || (uint64_t)tab_off + tab_len > slot.size() ||
+	    rel_count != 3 || (uint64_t)rel_off + rel_count * 4u > slot.size()) {
+		err = "codec slot header is invalid";
+		return false;
 	}
 	std::fill(flash_.begin() + off, flash_.end(), 0xFF);
 	std::copy(slot.begin(), slot.end(), flash_.begin() + off);

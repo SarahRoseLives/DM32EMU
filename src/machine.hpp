@@ -56,8 +56,10 @@ public:
 
 	void attach_virtual_rf(std::shared_ptr<VirtualRfBus> bus, uint8_t id)
 	{
+		if (rf_bus_) rf_bus_->remove_receiver(rf_id_);
 		rf_bus_ = std::move(bus);
 		rf_id_ = id;
+		if (rf_bus_) rf_bus_->add_receiver(id);
 	}
 	void set_virtual_rf_enabled(bool on) { rf_enabled_ = on; }
 	bool virtual_rf_enabled() const { return rf_enabled_; }

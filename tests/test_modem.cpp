@@ -28,6 +28,7 @@ int main()
 
 	auto bus = std::make_shared<VirtualRfBus>();
 	tx.attach_virtual_rf(bus, 0);
+	bus->add_receiver(1);
 	tx.set_virtual_rf_enabled(true);
 
 	for (int i = 0; i < 27; i++) tx.write8(Machine::MODEM_RAM_BASE + 0x960 + i, (uint8_t)(0xA0 + i));
@@ -65,6 +66,7 @@ int main()
 	auto bus2 = std::make_shared<VirtualRfBus>();
 	Machine tx2;
 	tx2.attach_virtual_rf(bus2, 0);
+	bus2->add_receiver(1);
 	tx2.set_virtual_rf_enabled(true);
 	sys_write(tx2, 0x100, 0x6Eu);
 	sys_write(tx2, 0x384, 1);

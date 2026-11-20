@@ -286,6 +286,7 @@ int main(int argc, char **argv)
 		if (!build_codec_slot(codec_backup, slot, ci, err) ||
 		    !machine.install_codec_slot(slot, err)) {
 			std::fprintf(stderr, "codec backup: %s\n", err.c_str());
+			return 1;
 		} else {
 			std::fprintf(stderr, "codec backup: %s, tag %u, %u bytes\n", ci.profile.c_str(), ci.tag,
 				     (unsigned)ci.code_len);

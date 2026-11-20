@@ -3,6 +3,7 @@
 #include "codec_backup.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -46,11 +47,6 @@ uint32_t le32(const uint8_t *p)
 {
 	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
-void put16(std::vector<uint8_t> &v, uint16_t x)
-{
-	v.push_back((uint8_t)x);
-	v.push_back((uint8_t)(x >> 8));
-}
 void put32(std::vector<uint8_t> &v, uint32_t x)
 {
 	v.push_back((uint8_t)x);
@@ -74,7 +70,20 @@ bool read_file(const std::string &path, std::vector<uint8_t> &out, std::string &
 	return true;
 }
 
-bool zip_member(const std::string &path, const std::string &member, std::vector<uint8_t> &out, std::string &err)
+bool is_zip(const std::string &path)
+{
+	std::string ext = std::filesystem::path(path).extension().string();
+	std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+	return ext == ".zip";
+}
+
+uint32_t zip_crc(const std::vector<uint8_t> &data)
+{
+	return (uint32_t)::crc32(0, data.data(), (uInt)data.size());
+}
+
+bool zip_member(const std::string &path, const std::string &member, std::vector<uint8_t> &out,
+		size_t max_size, std::string &err)
 {
 	std::vector<uint8_t> zip;
 	if (!read_file(path, zip, err)) return false;
@@ -103,6 +112,7 @@ bool zip_member(const std::string &path, const std::string &member, std::vector<
 			return false;
 		}
 		const uint16_t method = le16(zip.data() + p + 10);
+		const uint32_t crc = le32(zip.data() + p + 16);
 		const uint32_t csize = le32(zip.data() + p + 20);
 		const uint32_t usize = le32(zip.data() + p + 24);
 		const uint16_t nlen = le16(zip.data() + p + 28);
@@ -111,6 +121,10 @@ bool zip_member(const std::string &path, const std::string &member, std::vector<
 		const uint32_t lho = le32(zip.data() + p + 42);
 		const std::string name(reinterpret_cast<const char *>(zip.data() + p + 46), nlen);
 		if (name == member) {
+			if (usize > max_size) {
+				err = "ZIP member " + member + " is too large";
+				return false;
+			}
 			if (lho + 30 > zip.size() || le32(zip.data() + lho) != 0x04034b50u) {
 				err = "bad ZIP local header";
 				return false;
@@ -123,27 +137,34 @@ bool zip_member(const std::string &path, const std::string &member, std::vector<
 				return false;
 			}
 			if (method == 0) {
+				if (csize != usize) {
+					err = "bad stored ZIP member size";
+					return false;
+				}
 				out.assign(zip.begin() + (ptrdiff_t)data, zip.begin() + (ptrdiff_t)(data + csize));
-				return true;
-			}
-			if (method != 8) {
+			} else if (method == 8) {
+				out.resize(usize);
+				z_stream zs{};
+				if (inflateInit2(&zs, -MAX_WBITS) != Z_OK) {
+					err = "inflateInit2 failed";
+					return false;
+				}
+				zs.next_in = zip.data() + data;
+				zs.avail_in = csize;
+				zs.next_out = out.data();
+				zs.avail_out = usize;
+				const int rc = inflate(&zs, Z_FINISH);
+				inflateEnd(&zs);
+				if (rc != Z_STREAM_END || zs.total_out != usize) {
+					err = "cannot inflate ZIP member";
+					return false;
+				}
+			} else {
 				err = "unsupported ZIP compression method";
 				return false;
 			}
-			out.resize(usize);
-			z_stream zs{};
-			if (inflateInit2(&zs, -MAX_WBITS) != Z_OK) {
-				err = "inflateInit2 failed";
-				return false;
-			}
-			zs.next_in = zip.data() + data;
-			zs.avail_in = csize;
-			zs.next_out = out.data();
-			zs.avail_out = usize;
-			const int rc = inflate(&zs, Z_FINISH);
-			inflateEnd(&zs);
-			if (rc != Z_STREAM_END || zs.total_out != usize) {
-				err = "cannot inflate ZIP member";
+			if (zip_crc(out) != crc) {
+				err = "ZIP member " + member + " CRC mismatch";
 				return false;
 			}
 			return true;
@@ -156,9 +177,11 @@ bool zip_member(const std::string &path, const std::string &member, std::vector<
 
 bool get_program_memory(const std::string &path, std::vector<uint8_t> &pm, std::string &err)
 {
-	const std::string ext = std::filesystem::path(path).extension().string();
-	if (ext == ".zip" || ext == ".ZIP") return zip_member(path, "program-memory.bin", pm, err);
-	if (!read_file(path, pm, err)) return false;
+	if (is_zip(path)) {
+		if (!zip_member(path, "program-memory.bin", pm, 0x100000u, err)) return false;
+	} else if (!read_file(path, pm, err)) {
+		return false;
+	}
 	if (pm.size() != 0x100000u) {
 		err = "expected a 1 MB program-memory.bin or a backup ZIP";
 		return false;
@@ -265,17 +288,18 @@ bool load_data_backup(const std::string &path, std::vector<uint8_t> &data, uint3
 {
 	data.clear();
 	offset = 0;
-	const std::string ext = std::filesystem::path(path).extension().string();
-	if (ext == ".zip" || ext == ".ZIP") {
-		if (zip_member(path, "data-memory.bin", data, err)) {
+	if (is_zip(path)) {
+		if (zip_member(path, "data-memory.bin", data, 0x1000000u, err)) {
 			offset = 0;
 			return true;
 		}
+		if (err.find("not found") == std::string::npos) return false;
 		err.clear();
-		if (zip_member(path, "original-channels.bin", data, err)) {
+		if (zip_member(path, "original-channels.bin", data, 0x1000000u, err)) {
 			offset = 0;
 			return true;
 		}
+		if (err.find("not found") == std::string::npos) return false;
 		err = "backup ZIP holds no data-memory.bin or original-channels.bin";
 		return false;
 	}
