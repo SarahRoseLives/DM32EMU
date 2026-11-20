@@ -24,6 +24,8 @@ public:
 	~DualRadioWindow() override;
 
 	void setCodecBackup(const QString &path);
+	void setAutoRestore(bool on) { auto_restore_ = on; }
+	void restoreLastSession();
 	void loadRadio(int side, const QString &firmware, const QString &dataBackup = QString(), uint32_t dmrId = 0);
 	void loadRadioFromPath(int side, const QString &firmware);
 
@@ -53,6 +55,8 @@ private:
 	void chooseCodec();
 	void updateLinkStats();
 	void setCodecLabel();
+	void loadSettings();
+	void saveSettings();
 
 	std::shared_ptr<VirtualRfBus> bus_;
 	Pane panes_[2];
@@ -62,4 +66,5 @@ private:
 	QLabel *linkStats_ = nullptr;
 	QLabel *codecLabel_ = nullptr;
 	QTimer *statsTimer_ = nullptr;
+	bool auto_restore_ = true;
 };

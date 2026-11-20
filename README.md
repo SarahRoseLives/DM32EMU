@@ -97,7 +97,8 @@ to load an image. The toolbar has Open, Pause, Reset and Save screenshot.
 or a `DM32UV_Backup_*.zip`; the codec is shared by both radios in dual mode.
 The dual window has firmware and codeplug buttons for each radio, an optional
 per-radio DMR ID, a virtual RF toggle, a TS1/TS2 selector, and live
-sent/delivered/dropped counters. Set different DMR IDs for the two radios, or
+sent/delivered/dropped counters. It remembers the last codec, firmware and
+codeplug paths, DMR IDs, RF timeslot and link state. Set different DMR IDs for the two radios, or
 use `--dmr-id-a`/`--dmr-id-b`; this avoids editing a copy of the codeplug.
 Both radios must use the same DMR channel, timeslot and color code; set the RF
 timeslot to match the channel.

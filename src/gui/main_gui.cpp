@@ -848,6 +848,7 @@ int main(int argc, char **argv)
 	if (parser.isSet(dual)) {
 		auto *w = new DualRadioWindow;
 		w->setAttribute(Qt::WA_DeleteOnClose);
+		if (parser.isSet(fwA) || parser.isSet(fwB)) w->setAutoRestore(false);
 		w->show();
 		const QString ca = parser.value(codec);
 		const QString fa = parser.value(fwA), fb = parser.value(fwB);

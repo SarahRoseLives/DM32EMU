@@ -19,6 +19,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSettings>
 #include <QStatusBar>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -40,6 +41,10 @@ DualRadioWindow::DualRadioWindow(QWidget *parent) : QMainWindow(parent)
 	statsTimer_->start(200);
 	setCodecLabel();
 	updateLinkStats();
+	loadSettings();
+	QTimer::singleShot(0, this, [this] {
+		if (auto_restore_) restoreLastSession();
+	});
 }
 
 DualRadioWindow::~DualRadioWindow()
@@ -179,7 +184,57 @@ void DualRadioWindow::setCodecBackup(const QString &path)
 {
 	codecBackup_ = path;
 	setCodecLabel();
+	saveSettings();
 	reloadAll();
+}
+
+void DualRadioWindow::loadSettings()
+{
+	QSettings settings;
+	const QString codec = settings.value(QStringLiteral("dual/codec")).toString();
+	if (!codec.isEmpty() && QFileInfo::exists(codec)) codecBackup_ = codec;
+	tsCombo_->setCurrentIndex(settings.value(QStringLiteral("dual/ts"), 1).toInt() == 2 ? 1 : 0);
+	linkToggle_->setChecked(settings.value(QStringLiteral("dual/link"), true).toBool());
+	for (int i = 0; i < 2; i++) {
+		Pane &p = panes_[i];
+		const QString side = i == 0 ? QStringLiteral("a") : QStringLiteral("b");
+		p.firmwarePath = settings.value(QStringLiteral("dual/%1/firmware").arg(side)).toString();
+		p.dataPath = settings.value(QStringLiteral("dual/%1/data").arg(side)).toString();
+		p.dmrId->setText(settings.value(QStringLiteral("dual/%1/dmr_id").arg(side)).toString());
+		if (!p.firmwarePath.isEmpty())
+			p.firmware->setText(QStringLiteral("firmware: ") + QFileInfo(p.firmwarePath).fileName());
+		if (!p.dataPath.isEmpty())
+			p.data->setText(QStringLiteral("codeplug: ") + QFileInfo(p.dataPath).fileName());
+	}
+	setCodecLabel();
+	updateLinkStats();
+}
+
+void DualRadioWindow::saveSettings()
+{
+	QSettings settings;
+	settings.setValue(QStringLiteral("dual/codec"), codecBackup_);
+	settings.setValue(QStringLiteral("dual/ts"), tsCombo_->currentData().toInt());
+	settings.setValue(QStringLiteral("dual/link"), linkToggle_->isChecked());
+	for (int i = 0; i < 2; i++) {
+		const Pane &p = panes_[i];
+		const QString side = i == 0 ? QStringLiteral("a") : QStringLiteral("b");
+		settings.setValue(QStringLiteral("dual/%1/firmware").arg(side), p.firmwarePath);
+		settings.setValue(QStringLiteral("dual/%1/data").arg(side), p.dataPath);
+		settings.setValue(QStringLiteral("dual/%1/dmr_id").arg(side), p.dmrId->text().trimmed());
+	}
+}
+
+void DualRadioWindow::restoreLastSession()
+{
+	bool restored = false;
+	for (int i = 0; i < 2; i++) {
+		if (!panes_[i].firmwarePath.isEmpty() && QFileInfo::exists(panes_[i].firmwarePath)) {
+			reload(i);
+			restored = true;
+		}
+	}
+	if (restored) statusBar()->showMessage(QStringLiteral("Restored last session"), 3000);
 }
 
 void DualRadioWindow::setCodecLabel()
@@ -210,6 +265,7 @@ void DualRadioWindow::loadRadio(int side, const QString &firmware, const QString
 	p.firmwarePath = firmware;
 	if (!dataBackup.isNull()) p.dataPath = dataBackup;
 	if (dmrId != 0) p.dmrId->setText(QString::number(dmrId));
+	saveSettings();
 	p.firmware->setText(QStringLiteral("firmware: ") + QFileInfo(firmware).fileName());
 	p.data->setText(p.dataPath.isEmpty() ? QStringLiteral("codeplug: built-in/default")
 					     : QStringLiteral("codeplug: ") + QFileInfo(p.dataPath).fileName());
@@ -244,6 +300,7 @@ void DualRadioWindow::openData(int side)
 	if (path.isEmpty()) return;
 	panes_[side].dataPath = path;
 	panes_[side].data->setText(QStringLiteral("codeplug: ") + QFileInfo(path).fileName());
+	saveSettings();
 	if (!panes_[side].firmwarePath.isEmpty()) reload(side);
 }
 
@@ -263,6 +320,7 @@ void DualRadioWindow::reload(int side)
 			return;
 		}
 	}
+	saveSettings();
 	p.emu->stop();
 	QString error;
 	if (!p.emu->loadFirmware(p.firmwarePath, p.dataPath, codecBackup_, error, dmrId)) {
@@ -293,6 +351,7 @@ void DualRadioWindow::updateLinkStats()
 
 void DualRadioWindow::closeEvent(QCloseEvent *event)
 {
+	saveSettings();
 	for (auto &p : panes_) {
 		if (p.emu) p.emu->stop();
 	}
