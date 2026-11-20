@@ -77,6 +77,8 @@ instruction run takes about 10 seconds on a current desktop.
 
 The GUI opens with the radio screen and keypad. Use **File > Open firmware**
 to load an image. The toolbar has Open, Pause, Reset and Save screenshot.
+
+![DM32EMU GUI demo](docs/dm32gui.gif)
 The keypad is clickable, and these keyboard keys map to the radio:
 
 | Key | Radio key |
