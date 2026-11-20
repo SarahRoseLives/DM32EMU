@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2026 The DM32EMU Authors
+// Copyright (c) 2026 Sarah Rose
 #include "emulator_thread.hpp"
 
 #include "cpu.hpp"

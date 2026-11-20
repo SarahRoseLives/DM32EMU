@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Copyright (c) 2026 The DM32EMU Authors
+// Copyright (c) 2026 Sarah Rose
 #include "cpu.hpp"
 #include "elf.hpp"
 #include "firmware.hpp"
