@@ -72,6 +72,7 @@ public:
 	uint64_t cpu_cycles_to_next_timer(uint64_t cycles) const;
 
 	void attach_iq_channel(std::shared_ptr<VirtualRfIqChannel> channel, uint8_t id);
+	void detach_iq_channel();
 	void set_dmr_timeslot(uint8_t ts) { modem_.set_timeslot(ts); }
 	uint16_t fd_state() const { return fd_.state; }
 	uint16_t fd_bandwidth() const { return fd_.bandwidth; }

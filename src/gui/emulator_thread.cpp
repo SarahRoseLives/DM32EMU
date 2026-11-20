@@ -15,7 +15,11 @@
 
 EmulatorThread::EmulatorThread(QObject *parent) : QThread(parent) {}
 
-EmulatorThread::~EmulatorThread() { stop(); }
+EmulatorThread::~EmulatorThread()
+{
+	stop();
+	if (machine_) machine_->detach_iq_channel();
+}
 
 bool EmulatorThread::loadFirmware(const QString &path, const QString &dataBackup, const QString &codecBackup,
 				  QString &error, uint32_t dmrId)
@@ -24,6 +28,7 @@ bool EmulatorThread::loadFirmware(const QString &path, const QString &dataBackup
 		error = QStringLiteral("the emulator is still running");
 		return false;
 	}
+	if (machine_) machine_->detach_iq_channel();
 
 	auto machine = std::make_unique<Machine>();
 	machine->set_uart_echo(false);

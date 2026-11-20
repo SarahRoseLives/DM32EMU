@@ -92,9 +92,19 @@ Machine::Machine() : modem_(modem_ram_, [this](int source) { pic_raise(source); 
 	reset();
 }
 
-Machine::~Machine()
+Machine::~Machine() = default;
+
+void Machine::detach_iq_channel()
 {
-	if (iq_channel_) iq_channel_->remove_receiver(iq_id_);
+	if (!iq_channel_) return;
+	iq_channel_->remove_receiver(iq_id_);
+	iq_channel_.reset();
+	air_.reset();
+	packet_.reset();
+	fm_.reset();
+	modem_.set_burst_sink({});
+	modem_.set_phy_block_sink({});
+	modem_.set_phy_end_sink({});
 }
 
 void Machine::transmit_dmr(const DmrBurst &burst)

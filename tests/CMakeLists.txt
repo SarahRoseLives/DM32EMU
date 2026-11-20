@@ -18,6 +18,10 @@ add_executable(test_modem test_modem.cpp)
 target_link_libraries(test_modem PRIVATE dm32core)
 add_test(NAME modem COMMAND test_modem)
 
+add_executable(test_iq_reload test_iq_reload.cpp)
+target_link_libraries(test_iq_reload PRIVATE dm32core)
+add_test(NAME iq_reload COMMAND test_iq_reload)
+
 add_executable(test_gps test_gps.cpp)
 target_link_libraries(test_gps PRIVATE dm32core)
 add_test(NAME gps COMMAND test_gps)
