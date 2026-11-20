@@ -236,7 +236,8 @@ Python/Pillow.
 ```
 src/main.cpp       CLI, symbol table, breakpoints, key schedule, run loop
 src/cpu.cpp/.hpp   C-SKY ABIv2 CK803S interpreter
-src/machine.cpp    memory map, PIC, timers, GPIO/keypad, UART, SPI NOR, LCD, HR_C7000 modem
+src/machine.cpp    memory map, PIC, timers, GPIO/keypad, UART, SPI NOR, LCD
+src/hr_c7000_modem.cpp  HR_C7000 DMR registers, slot timing and virtual RF bridge
 src/elf.cpp        ELF32 loader and symbol reader
 src/firmware.cpp   shared .bin/.elf firmware loader
 src/codec_backup.cpp  backup ZIP/program-memory reader and codec slot builder

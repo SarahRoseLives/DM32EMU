@@ -3,7 +3,7 @@
 #pragma once
 
 #include "elf.hpp"
-#include "virtual_rf.hpp"
+#include "hr_c7000_modem.hpp"
 
 #include <array>
 #include <cstdint>
@@ -56,15 +56,9 @@ public:
 	void tick(uint64_t cycles);
 	uint64_t cpu_cycles_to_next_timer(uint64_t cycles) const;
 
-	void attach_virtual_rf(std::shared_ptr<VirtualRfBus> bus, uint8_t id)
-	{
-		if (rf_bus_) rf_bus_->remove_receiver(rf_id_);
-		rf_bus_ = std::move(bus);
-		rf_id_ = id;
-		if (rf_bus_) rf_bus_->add_receiver(id);
-	}
-	void set_virtual_rf_enabled(bool on) { rf_enabled_ = on; }
-	bool virtual_rf_enabled() const { return rf_enabled_; }
+	void attach_virtual_rf(std::shared_ptr<VirtualRfBus> bus, uint8_t id) { modem_.attach_virtual_rf(std::move(bus), id); }
+	void set_virtual_rf_enabled(bool on) { modem_.set_virtual_rf_enabled(on); }
+	bool virtual_rf_enabled() const { return modem_.virtual_rf_enabled(); }
 	bool irq_pending() const { return irq_asserted_; }
 	int irq_source() const;
 	void clear_irq(int source);
@@ -88,31 +82,9 @@ private:
 	std::vector<uint8_t> flash_;
 	std::vector<uint8_t> sys_sram_;
 	std::vector<uint8_t> modem_ram_;
+	HrC7000Modem modem_;
 	std::vector<uint8_t> data_flash_;
 	bool irq_asserted_ = false;
-
-	std::shared_ptr<VirtualRfBus> rf_bus_;
-	uint8_t rf_id_ = 0;
-	bool rf_enabled_ = false;
-	std::array<uint32_t, 0x200> modem_regs_{};
-	uint32_t modem_work_mode_ = 0;
-	uint32_t modem_local_cc_ = 0;
-	uint32_t modem_send_type_ = 0;
-	uint32_t modem_rx_type_info_ = 0;
-	uint32_t modem_sys_pending_ = 0;
-	uint32_t modem_sys_mask_ = 0;
-	uint32_t modem_layer2_status_ = 0;
-	bool modem_slot_active_ = false;
-	uint8_t modem_slot_ts_ = 0;
-	uint64_t modem_slot_next_apb_ = 0;
-	uint64_t modem_deframe_due_apb_ = 0;
-	bool modem_deframe_pending_ = false;
-	VirtualRfBurst modem_rx_burst_{};
-	void modem_tick();
-	uint32_t modem_read(uint32_t off, uint32_t size);
-	void modem_write(uint32_t off, uint32_t value, uint32_t size);
-	void modem_capture_tx();
-	void modem_inject_rx();
 
 	std::vector<uint8_t> uart_out_;
 	std::function<void(uint8_t)> uart_tx_sink_;

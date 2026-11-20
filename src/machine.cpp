@@ -65,7 +65,7 @@ bool in(uint32_t addr, uint32_t base, uint32_t len) { return addr >= base && add
 
 } // namespace
 
-Machine::Machine()
+Machine::Machine() : modem_(modem_ram_, [this](int source) { pic_raise(source); })
 {
 	ram_.resize(RAM_SIZE, 0);
 	flash_.resize(FLASH_SIZE, 0xFF);
@@ -89,10 +89,7 @@ Machine::Machine()
 	reset();
 }
 
-Machine::~Machine()
-{
-	if (rf_bus_) rf_bus_->remove_receiver(rf_id_);
-}
+Machine::~Machine() = default;
 
 void Machine::reset()
 {
@@ -113,20 +110,7 @@ void Machine::reset()
 	pic_.mask = pic_.mask1 = 0xFFFFFFFFu;
 	pic_.po = pic_.po1 = 0xFFFFFFFFu;
 	irq_asserted_ = false;
-	modem_regs_ = {};
-	modem_work_mode_ = 0;
-	modem_local_cc_ = 0;
-	modem_send_type_ = 0;
-	modem_rx_type_info_ = 0;
-	modem_sys_pending_ = 0;
-	modem_sys_mask_ = 0;
-	modem_layer2_status_ = 0;
-	modem_slot_active_ = false;
-	modem_slot_ts_ = 0;
-	modem_slot_next_apb_ = 0;
-	modem_deframe_due_apb_ = 0;
-	modem_deframe_pending_ = false;
-	modem_rx_burst_ = {};
+	modem_.reset();
 	apb_cycles_ = 0;
 	timers_ = {};
 	for (auto &t : timers_) t.ctrl = 0x4;
@@ -545,171 +529,7 @@ void Machine::tick(uint64_t cycles)
 			}
 		}
 	}
-	modem_tick();
-}
-
-uint32_t Machine::modem_read(uint32_t off, uint32_t size)
-{
-	(void)size;
-	switch (off) {
-	case 0x100: return modem_work_mode_;
-	case 0x384: return modem_local_cc_;
-	case 0x390: return modem_rx_type_info_;
-	case 0x398: return modem_sys_pending_;
-	case 0x39C: return modem_sys_mask_;
-	case 0x408: return modem_regs_[(off - 0x100u) / 4u];
-	case 0x418: return modem_send_type_;
-	case 0x41C: return modem_layer2_status_;
-	default: break;
-	}
-	if (off < 0x100u || off >= 0x600u) return 0;
-	return modem_regs_[(off - 0x100u) / 4u];
-}
-
-void Machine::modem_write(uint32_t off, uint32_t value, uint32_t size)
-{
-	if (off < 0x100u || off >= 0x600u) return;
-	if (size != 4) {
-		const uint32_t idx = (off - 0x100u) / 4u;
-		const uint32_t shift = (off & 3u) * 8u;
-		const uint32_t mask = 0xFFu << shift;
-		modem_regs_[idx] = (modem_regs_[idx] & ~mask) | ((value & 0xFFu) << shift);
-		return;
-	}
-	switch (off) {
-	case 0x100: {
-		modem_work_mode_ = value;
-		const bool active = value == 0x6Eu || value == 0x22u;
-		if (active && !modem_slot_active_) {
-			modem_slot_active_ = true;
-			modem_slot_ts_ = 0;
-			modem_slot_next_apb_ = apb_cycles_ + 84000000ull * 30ull / 1000ull;
-		} else if (!active) {
-			modem_slot_active_ = false;
-			modem_slot_ts_ = 0;
-			modem_deframe_pending_ = false;
-		}
-		break;
-	}
-	case 0x384: modem_local_cc_ = value; break;
-	case 0x390: break;
-	case 0x398: break;
-	case 0x39C: modem_sys_mask_ = value; break;
-	case 0x3A0: modem_sys_pending_ &= ~value; break;
-	case 0x3B0: break;
-	case 0x408:
-		modem_regs_[(off - 0x100u) / 4u] = value;
-		if ((value & 0x80u) && !(value & 0x40u)) modem_capture_tx();
-		break;
-	case 0x418: modem_send_type_ = value; break;
-	case 0x41C: break;
-	default:
-		modem_regs_[(off - 0x100u) / 4u] = value;
-		break;
-	}
-}
-
-static uint8_t gf_mul8(uint8_t a, uint8_t b)
-{
-	uint8_t p = 0;
-	while (b) {
-		if (b & 1) p ^= a;
-		a = (uint8_t)((a << 1) ^ ((a & 0x80u) ? 0x1Du : 0));
-		b >>= 1;
-	}
-	return p;
-}
-
-static void rs129_parity(const uint8_t data[9], uint8_t parity[3])
-{
-	uint8_t r2 = 0, r1 = 0, r0 = 0;
-	for (int i = 0; i < 9; i++) {
-		const uint8_t fb = data[i] ^ r2;
-		r2 = r1 ^ gf_mul8(fb, 0x0E);
-		r1 = r0 ^ gf_mul8(fb, 0x38);
-		r0 = gf_mul8(fb, 0x40);
-	}
-	parity[0] = r2; parity[1] = r1; parity[2] = r0;
-}
-
-void Machine::modem_capture_tx()
-{
-	if (!(modem_work_mode_ == 0x6Eu || modem_work_mode_ == 0x22u)) return;
-	VirtualRfBurst b;
-	b.source = rf_id_;
-	b.cc = (uint8_t)(modem_local_cc_ & 0xFu);
-	b.ts = modem_slot_ts_ == 0 ? 1 : modem_slot_ts_;
-	const uint32_t st = modem_send_type_;
-	if (st & 0x08u) {
-		b.kind = 0x10;
-		b.voice_index = (uint8_t)((st >> 4) & 7u);
-		b.len = 27;
-		std::copy(modem_ram_.begin() + 0x960, modem_ram_.begin() + 0x960 + 27, b.payload);
-	} else {
-		b.kind = (uint8_t)((st >> 4) & 0xFu);
-		if (b.kind == 0x1Fu) return;
-		b.len = b.kind == 0x8u ? 18 : b.kind == 0xAu ? 24 : 12;
-		std::copy(modem_ram_.begin(), modem_ram_.begin() + b.len, b.payload);
-		if (b.kind == 0x1u || b.kind == 0x2u) {
-			uint8_t p[3];
-			const uint8_t mask = b.kind == 0x1u ? 0x96u : 0x99u;
-			rs129_parity(b.payload, p);
-			b.payload[9] = (uint8_t)(p[0] ^ mask);
-			b.payload[10] = (uint8_t)(p[1] ^ mask);
-			b.payload[11] = (uint8_t)(p[2] ^ mask);
-		}
-	}
-	if (rf_enabled_ && rf_bus_) {
-		rf_bus_->send(b);
-	}
-	pic_raise(32); // RF TX start: the driver keys the RF path and reports the slot
-}
-
-void Machine::modem_inject_rx()
-{
-	VirtualRfBurst b = modem_rx_burst_;
-	const uint8_t ts = b.ts == 2 ? 2 : 1;
-	const uint32_t sync_family = ts == 2 ? 3u : 2u; // DMR_SYNC_TS2 / DMR_SYNC_TS1
-	uint32_t rti = (sync_family << 2) | 2u;
-	rti |= (uint32_t)(b.cc & 0xFu) << 4;
-	if (b.kind == 0x10u) {
-		rti |= ((uint32_t)(b.voice_index + 1u) & 7u) << 12;
-		std::copy(b.payload, b.payload + 27, modem_ram_.begin() + 0x960);
-	} else {
-		rti |= ((uint32_t)b.kind & 0xFu) << 8;
-		std::copy(b.payload, b.payload + b.len, modem_ram_.begin() + 0x4B0);
-	}
-	modem_rx_type_info_ = rti;
-	modem_sys_pending_ |= 1u << 3; // SYS_DEFRAME
-	pic_raise(29);
-}
-
-void Machine::modem_tick()
-{
-	if (!modem_slot_active_) return;
-	const uint64_t slot = 84000000ull * 30ull / 1000ull;
-	if (apb_cycles_ >= modem_slot_next_apb_) {
-		modem_slot_ts_ = modem_slot_ts_ == 1 ? 2 : 1;
-		modem_layer2_status_ = modem_slot_ts_ == 2 ? 0xC0000000u : 0u;
-		pic_raise(30);
-		pic_raise(31);
-		if (rf_enabled_ && rf_bus_ && !modem_deframe_pending_ &&
-		    (modem_sys_pending_ & (1u << 3)) == 0) {
-			VirtualRfBurst b;
-			if (rf_bus_->receive(rf_id_, b)) {
-				modem_rx_burst_ = b;
-				modem_deframe_pending_ = true;
-				modem_deframe_due_apb_ = apb_cycles_ + 168000u; // about 2 ms
-			}
-		}
-		modem_slot_next_apb_ += slot;
-		if (modem_slot_next_apb_ <= apb_cycles_) modem_slot_next_apb_ = apb_cycles_ + slot;
-	}
-	if (modem_deframe_pending_ && apb_cycles_ >= modem_deframe_due_apb_ &&
-	    (modem_sys_pending_ & (1u << 3)) == 0) {
-		modem_deframe_pending_ = false;
-		modem_inject_rx();
-	}
+	modem_.tick(apb_cycles_);
 }
 
 void Machine::update_irq()
@@ -1111,7 +931,7 @@ uint32_t Machine::mmio_read(uint32_t addr, uint32_t size)
 {
 	if (in(addr, SYS_BASE, 0x1000)) {
 		const uint32_t off = addr - SYS_BASE;
-		if (off >= 0x100u && off < 0x600u) return modem_read(off, size);
+		if (off >= 0x100u && off < 0x600u) return modem_.read(off, size);
 		switch (off) {
 		case 0x000: return sys_.soft_rstn;
 		case 0x004: return sys_.clk_ctrl | 0xC0000000u; // PLL locked and clock switch done
@@ -1252,7 +1072,7 @@ void Machine::mmio_write(uint32_t addr, uint32_t value, uint32_t size)
 	if (in(addr, SYS_BASE, 0x1000)) {
 		const uint32_t sys_off = addr - SYS_BASE;
 		if (sys_off >= 0x100u && sys_off < 0x600u) {
-			modem_write(sys_off, value, size);
+			modem_.write(sys_off, value, size, apb_cycles_);
 			return;
 		}
 		switch (addr - SYS_BASE) {

@@ -27,6 +27,7 @@ add_library(dm32core STATIC
   src/elf.cpp
   src/firmware.cpp
   src/codec_backup.cpp
+  src/hr_c7000_modem.cpp
   src/cpu.cpp
   src/machine.cpp
   src/virtual_rf.cpp
