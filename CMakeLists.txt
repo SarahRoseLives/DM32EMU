@@ -40,6 +40,7 @@ target_link_libraries(dm32emu PRIVATE dm32core)
 
 enable_testing()
 add_test(NAME cpu_smoke COMMAND dm32emu --self-test)
+add_subdirectory(tests)
 
 find_package(Qt6 COMPONENTS Widgets QUIET)
 if(Qt6Widgets_FOUND)

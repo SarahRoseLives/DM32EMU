@@ -119,6 +119,7 @@ void Machine::reset()
 	modem_sys_mask_ = 0;
 	modem_layer2_status_ = 0;
 	modem_slot_active_ = false;
+	modem_slot_ts_ = 0;
 	modem_slot_next_apb_ = 0;
 	modem_deframe_due_apb_ = 0;
 	modem_deframe_pending_ = false;
@@ -530,9 +531,11 @@ void Machine::modem_write(uint32_t off, uint32_t value, uint32_t size)
 		const bool active = value == 0x6Eu || value == 0x22u;
 		if (active && !modem_slot_active_) {
 			modem_slot_active_ = true;
+			modem_slot_ts_ = 0;
 			modem_slot_next_apb_ = apb_cycles_ + 84000000ull * 30ull / 1000ull;
 		} else if (!active) {
 			modem_slot_active_ = false;
+			modem_slot_ts_ = 0;
 			modem_deframe_pending_ = false;
 		}
 		break;
@@ -584,7 +587,7 @@ void Machine::modem_capture_tx()
 	VirtualRfBurst b;
 	b.source = rf_id_;
 	b.cc = (uint8_t)(modem_local_cc_ & 0xFu);
-	b.ts = 1;
+	b.ts = modem_slot_ts_ == 0 ? 1 : modem_slot_ts_;
 	const uint32_t st = modem_send_type_;
 	if (st & 0x08u) {
 		b.kind = 0x10;
@@ -614,7 +617,9 @@ void Machine::modem_capture_tx()
 void Machine::modem_inject_rx()
 {
 	VirtualRfBurst b = modem_rx_burst_;
-	uint32_t rti = (2u << 2) | 2u; // TS1 sync family and sync_type
+	const uint8_t ts = b.ts == 2 ? 2 : 1;
+	const uint32_t sync_family = ts == 2 ? 3u : 2u; // DMR_SYNC_TS2 / DMR_SYNC_TS1
+	uint32_t rti = (sync_family << 2) | 2u;
 	rti |= (uint32_t)(b.cc & 0xFu) << 4;
 	if (b.kind == 0x10u) {
 		rti |= ((uint32_t)(b.voice_index + 1u) & 7u) << 12;
@@ -633,6 +638,8 @@ void Machine::modem_tick()
 	if (!modem_slot_active_) return;
 	const uint64_t slot = 84000000ull * 30ull / 1000ull;
 	if (apb_cycles_ >= modem_slot_next_apb_) {
+		modem_slot_ts_ = modem_slot_ts_ == 1 ? 2 : 1;
+		modem_layer2_status_ = modem_slot_ts_ == 2 ? 0xC0000000u : 0u;
 		pic_raise(30);
 		pic_raise(31);
 		if (rf_enabled_ && rf_bus_ && !modem_deframe_pending_ &&

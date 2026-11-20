@@ -96,8 +96,9 @@ to load an image. The toolbar has Open, Pause, Reset and Save screenshot.
 **File > Open codec backup** to install a codec slot from `program-memory.bin`
 or a `DM32UV_Backup_*.zip`; the codec is shared by both radios in dual mode.
 The dual window has firmware and codeplug buttons for each radio, a virtual RF
-toggle, and live sent/delivered/dropped counters. Both radios must use the same
-DMR channel, timeslot and color code.
+toggle, a TS1/TS2 selector, and live sent/delivered/dropped counters. Both
+radios must use the same DMR channel, timeslot and color code; set the RF
+timeslot to match the channel.
 
 ![DM32EMU dual-radio GUI](docs/dm32gui-dual.gif)
 
@@ -146,6 +147,35 @@ QT_QPA_PLATFORM=offscreen ./build/dm32gui firmware.bin \
 `--screenshot` writes the 240x320 LCD; `--window-screenshot` writes the whole
 window with the radio body and keypad. The process exits after the requested
 number of full LCD frames.
+
+### Tests
+
+```sh
+ctest --test-dir build --output-on-failure
+```
+
+This runs the CPU smoke test, the offscreen GUI test, and unit tests for the
+virtual RF bus, the modem TX/RX paths, and backup/codec handling.
+
+Two integration tests use local fixtures and are skipped when their environment
+variables are absent:
+
+```sh
+# Build a codec slot and install it
+DM32EMU_TEST_CODEC=~/Documents/DM32UV_Backup.zip \
+    ctest --test-dir build -R codec_fixture --output-on-failure
+
+# Boot two RadioFoundry radios, key A, check B's call
+DM32EMU_TEST_FIRMWARE=~/Projects/RadioFoundry/build/dm32/rfoundry_dm32.bin \
+DM32EMU_TEST_CODEC=~/Documents/DM32UV_Backup.zip \
+DM32EMU_TEST_DATA_A=~/Documents/codeplug-a.bin \
+DM32EMU_TEST_DATA_B=~/Documents/codeplug-b.bin \
+    ctest --test-dir build -R firmware_dual_rf --output-on-failure
+```
+
+The dual test needs two codeplugs with different DMR IDs and the same DMR home
+channel. It reads the radio's `dmr.ts` and forces the virtual RF link to that
+timeslot.
 
 ### Debugging options
 
@@ -211,6 +241,7 @@ src/codec_backup.cpp  backup ZIP/program-memory reader and codec slot builder
 src/virtual_rf.cpp  shared burst bus for two or more emulated radios
 src/uart_bridge.cpp  UART0 to PTY/TCP bridge for the debug link and CPS tools
 src/gui/           Qt6 GUI: worker thread, radio widget, single and dual windows
+tests/             unit tests and opt-in firmware/codec integration tests
 ```
 
 The `Machine` class is the bus. RAM, program flash, system SRAM and modem RAM

@@ -11,6 +11,7 @@
 class RadioWidget;
 class EmulatorThread;
 class QCheckBox;
+class QComboBox;
 class QGroupBox;
 class QLabel;
 class QTimer;
@@ -55,6 +56,7 @@ private:
 	Pane panes_[2];
 	QString codecBackup_;
 	QCheckBox *linkToggle_ = nullptr;
+	QComboBox *tsCombo_ = nullptr;
 	QLabel *linkStats_ = nullptr;
 	QLabel *codecLabel_ = nullptr;
 	QTimer *statsTimer_ = nullptr;

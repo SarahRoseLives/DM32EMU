@@ -99,6 +99,7 @@ private:
 	uint32_t modem_sys_mask_ = 0;
 	uint32_t modem_layer2_status_ = 0;
 	bool modem_slot_active_ = false;
+	uint8_t modem_slot_ts_ = 0;
 	uint64_t modem_slot_next_apb_ = 0;
 	uint64_t modem_deframe_due_apb_ = 0;
 	bool modem_deframe_pending_ = false;

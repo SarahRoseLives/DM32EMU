@@ -4,6 +4,10 @@
 
 void VirtualRfBus::send(const VirtualRfBurst &burst)
 {
+	VirtualRfBurst queued = burst;
+	const uint8_t forced_ts = timeslot_.load(std::memory_order_relaxed);
+	if (forced_ts != 0) queued.ts = forced_ts;
+
 	std::function<void(const VirtualRfBurst &)> obs;
 	{
 		std::lock_guard<std::mutex> lock(mutex_);
@@ -12,10 +16,10 @@ void VirtualRfBus::send(const VirtualRfBurst &burst)
 			queue_.pop_front();
 			dropped_.fetch_add(1, std::memory_order_relaxed);
 		}
-		queue_.push_back(burst);
+		queue_.push_back(queued);
 		obs = observer_;
 	}
-	if (obs) obs(burst);
+	if (obs) obs(queued);
 }
 
 bool VirtualRfBus::receive(uint8_t receiver, VirtualRfBurst &burst)

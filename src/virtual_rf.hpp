@@ -26,6 +26,9 @@ public:
 	bool receive(uint8_t receiver, VirtualRfBurst &burst);
 	void clear();
 	void set_observer(std::function<void(const VirtualRfBurst &)> obs) { observer_ = std::move(obs); }
+	// 0 keeps each burst's own timeslot; 1 or 2 forces the link to that TS.
+	void set_timeslot(uint8_t ts) { timeslot_.store(ts == 1 || ts == 2 ? ts : 0); }
+	uint8_t timeslot() const { return timeslot_.load(); }
 
 	uint64_t sent() const { return sent_.load(); }
 	uint64_t delivered() const { return delivered_.load(); }
@@ -38,5 +41,6 @@ private:
 	std::atomic<uint64_t> sent_{0};
 	std::atomic<uint64_t> delivered_{0};
 	std::atomic<uint64_t> dropped_{0};
+	std::atomic<uint8_t> timeslot_{0};
 	std::function<void(const VirtualRfBurst &)> observer_;
 };

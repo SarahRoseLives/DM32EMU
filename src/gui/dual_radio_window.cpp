@@ -6,6 +6,7 @@
 #include "radio_widget.hpp"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QCloseEvent>
 #include <QDir>
 #include <QFileDialog>
@@ -59,12 +60,18 @@ void DualRadioWindow::buildUi()
 	auto *codecButton = new QPushButton(QStringLiteral("Codec backup..."), shared);
 	linkToggle_ = new QCheckBox(QStringLiteral("Virtual RF link"), shared);
 	linkToggle_->setChecked(true);
+	tsCombo_ = new QComboBox(shared);
+	tsCombo_->addItem(QStringLiteral("TS1"), 1);
+	tsCombo_->addItem(QStringLiteral("TS2"), 2);
+	bus_->set_timeslot(1);
 	linkStats_ = new QLabel(shared);
 	auto *clear = new QPushButton(QStringLiteral("Clear RF queue"), shared);
 	sharedRow->addWidget(codecLabel_, 1);
 	sharedRow->addWidget(codecButton);
 	sharedRow->addSpacing(16);
 	sharedRow->addWidget(linkToggle_);
+	sharedRow->addWidget(new QLabel(QStringLiteral("RF TS"), shared));
+	sharedRow->addWidget(tsCombo_);
 	sharedRow->addWidget(linkStats_);
 	sharedRow->addWidget(clear);
 	root->addWidget(shared);
@@ -77,8 +84,8 @@ void DualRadioWindow::buildUi()
 	radios->addWidget(panes_[1].box, 1);
 
 	auto *hint = new QLabel(QStringLiteral(
-		"Use a DMR channel on both radios (TS1, same color code). "
-		"Open each radio's firmware and codeplug; press PTT on either keypad."), central);
+		"Use a DMR channel on both radios (same timeslot and color code). "
+		"Select the matching RF timeslot above, then press PTT on either keypad."), central);
 	hint->setWordWrap(true);
 	root->addWidget(hint);
 
@@ -87,6 +94,10 @@ void DualRadioWindow::buildUi()
 
 	connect(codecButton, &QPushButton::clicked, this, &DualRadioWindow::chooseCodec);
 	connect(clear, &QPushButton::clicked, this, [this] { bus_->clear(); updateLinkStats(); });
+	connect(tsCombo_, &QComboBox::currentIndexChanged, this, [this](int) {
+		bus_->set_timeslot((uint8_t)tsCombo_->currentData().toUInt());
+		updateLinkStats();
+	});
 	connect(linkToggle_, &QCheckBox::toggled, this, [this](bool on) {
 		for (auto &p : panes_) p.emu->setVirtualRfEnabled(on);
 		statusBar()->showMessage(on ? QStringLiteral("Virtual RF link on") : QStringLiteral("Virtual RF link off"), 3000);
@@ -252,7 +263,8 @@ void DualRadioWindow::reloadAll()
 
 void DualRadioWindow::updateLinkStats()
 {
-	linkStats_->setText(QStringLiteral("RF %1/%2/%3").arg(bus_->sent()).arg(bus_->delivered()).arg(bus_->dropped()));
+	linkStats_->setText(QStringLiteral("RF %1/%2/%3 TS%4")
+		.arg(bus_->sent()).arg(bus_->delivered()).arg(bus_->dropped()).arg(bus_->timeslot() ? bus_->timeslot() : 0));
 }
 
 void DualRadioWindow::closeEvent(QCloseEvent *event)
