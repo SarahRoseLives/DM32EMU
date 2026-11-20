@@ -771,7 +771,7 @@ void Machine::tick(uint64_t cycles)
 	}
 	if (iq_enabled_ && iq_channel_) {
 		std::vector<IqSample> iq;
-		while (iq_channel_->receive_at(iq_id_, rf_sample_time_, iq)) {
+		while (iq_channel_->receive(iq_id_, iq)) {
 			fd_.signal = true;
 			fd_.signal_apb = apb_cycles_;
 			if (air_) air_->receive_iq(iq.data(), iq.size());
