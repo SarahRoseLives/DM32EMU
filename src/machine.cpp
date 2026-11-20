@@ -149,6 +149,7 @@ void Machine::attach_iq_channel(std::shared_ptr<VirtualRfIqChannel> channel, uin
 		packet_.reset();
 		modem_.set_burst_sink({});
 		modem_.set_phy_block_sink({});
+		modem_.set_phy_end_sink({});
 		return;
 	}
 	iq_channel_->add_receiver(id);
@@ -176,6 +177,7 @@ void Machine::attach_iq_channel(std::shared_ptr<VirtualRfIqChannel> channel, uin
 		}
 		air_->transmit_dibits(dibits, 144);
 	});
+	modem_.set_phy_end_sink([this] { if (air_) air_->flush(); });
 }
 
 void Machine::reset()

@@ -27,6 +27,7 @@ public:
 	void transmit_dibits(const uint8_t *dibits, size_t count);
 	void transmit_phy_block(const uint8_t block[36]);
 	void generate(size_t count);
+	void flush();
 	void set_discriminator_sink(std::function<void(const int16_t *, size_t)> sink) { disc_sink_ = std::move(sink); }
 	void reset();
 

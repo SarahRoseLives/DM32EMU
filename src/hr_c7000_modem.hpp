@@ -31,12 +31,14 @@ public:
 
 	using PhySink = std::function<void(const uint8_t *, size_t)>;
 	void set_phy_block_sink(PhySink sink) { phy_sink_ = std::move(sink); }
+	void set_phy_end_sink(std::function<void()> sink) { phy_end_sink_ = std::move(sink); }
 	void inject_discriminator_samples(const int16_t *samples, size_t count);
 	bool pcm_mic_enabled() const { return (audio_control_ & (1u << 4)) != 0; }
 
 private:
 	void capture_tx(uint64_t apb_cycles);
 	void capture_phy(uint64_t apb_cycles);
+	void flush_phy();
 	void inject_rx();
 	void emit_fm_half();
 
@@ -58,11 +60,14 @@ private:
 	DmrBurst rx_burst_{};
 	BurstSink burst_sink_;
 	PhySink phy_sink_;
+	std::function<void()> phy_end_sink_;
 	uint32_t audio_control_ = 0;
 	uint8_t ts_override_ = 0;
 	uint8_t fm_addr_sw_ = 0;
 	uint8_t fm_half_ = 0;
 	uint8_t tx_half_ = 0;
+	uint8_t phy_last_half_ = 0;
+	bool phy_last_valid_ = false;
 	uint64_t fm_half_next_apb_ = 0;
 	std::vector<int16_t> fm_samples_;
 };

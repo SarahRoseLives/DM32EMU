@@ -94,7 +94,15 @@ void C4fmFrontend::transmit_dibits(const uint8_t *dibits, size_t count)
 	if (dibits == nullptr || count == 0) return;
 	add_dibits(dibits, count, write_sample_);
 	write_sample_ += count * kOversample;
-	generate(count * kOversample);
+	const uint64_t lookahead = kSpan * kOversample;
+	const uint64_t safe = write_sample_ > lookahead ? write_sample_ - lookahead : 0;
+	if (safe > next_sample_) generate(safe - next_sample_);
+}
+
+void C4fmFrontend::flush()
+{
+	const uint64_t end = write_sample_ + kSpan * kOversample;
+	if (end > next_sample_) generate(end - next_sample_);
 }
 
 void C4fmFrontend::transmit_phy_block(const uint8_t block[36])

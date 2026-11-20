@@ -71,6 +71,7 @@ void HrC7000Modem::reset()
 	tx_half_ = 0;
 	fm_half_next_apb_ = 0;
 	fm_samples_.clear();
+	phy_last_valid_ = false;
 }
 
 uint32_t HrC7000Modem::read(uint32_t off, uint32_t size) const
@@ -106,7 +107,9 @@ void HrC7000Modem::write(uint32_t off, uint32_t value, uint32_t size, uint64_t a
 	}
 	switch (off) {
 	case 0x100: {
+		const bool was_phy = phy_mode(work_mode_);
 		work_mode_ = value;
+		if (was_phy && !phy_mode(value)) flush_phy();
 		const bool active = dmr_mode(value) || phy_mode(value);
 		if (active && !slot_active_) {
 			slot_active_ = true;
@@ -176,10 +179,21 @@ void HrC7000Modem::capture_phy(uint64_t apb_cycles)
 {
 	(void)apb_cycles;
 	if (!phy_sink_) return;
-	const uint8_t *block = ram_.data() + tx_half_ * 0x24u;
-	phy_sink_(block, 36);
+	// The chip sets up a slot without its last byte; that byte is written at
+	// the next boundary, so send the previous half now that it is complete.
+	if (phy_last_valid_) phy_sink_(ram_.data() + phy_last_half_ * 0x24u, 36);
+	phy_last_half_ = tx_half_;
+	phy_last_valid_ = true;
 	tx_half_ ^= 1u;
 	irq_(32);
+}
+
+void HrC7000Modem::flush_phy()
+{
+	if (!phy_last_valid_) return;
+	phy_last_valid_ = false;
+	if (phy_sink_) phy_sink_(ram_.data() + phy_last_half_ * 0x24u, 36);
+	if (phy_end_sink_) phy_end_sink_();
 }
 
 void HrC7000Modem::inject_discriminator_samples(const int16_t *samples, size_t count)
