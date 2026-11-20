@@ -101,7 +101,7 @@ long value_of(const std::string &text, const char *key)
 int skip()
 {
 	std::fprintf(stderr, "firmware integration test skipped: set DM32EMU_TEST_FIRMWARE, "
-			     "DM32EMU_TEST_CODEC, DM32EMU_TEST_DATA_A and DM32EMU_TEST_DATA_B\n");
+			     "DM32EMU_TEST_CODEC and DM32EMU_TEST_DATA_A; DM32EMU_TEST_DATA_B is optional\n");
 	return 77;
 }
 
@@ -112,14 +112,21 @@ int main()
 	Config cfg;
 	if (!getenv_str("DM32EMU_TEST_FIRMWARE", cfg.firmware) ||
 	    !getenv_str("DM32EMU_TEST_CODEC", cfg.codec) ||
-	    !getenv_str("DM32EMU_TEST_DATA_A", cfg.data_a) ||
-	    !getenv_str("DM32EMU_TEST_DATA_B", cfg.data_b))
+	    !getenv_str("DM32EMU_TEST_DATA_A", cfg.data_a))
 		return skip();
+	if (!getenv_str("DM32EMU_TEST_DATA_B", cfg.data_b)) cfg.data_b = cfg.data_a;
 
 	Machine a;
 	Machine b;
 	uint32_t entry_a = 0, entry_b = 0;
 	if (!setup(a, cfg, cfg.data_a, entry_a) || !setup(b, cfg, cfg.data_b, entry_b)) return 1;
+
+	// Give the radios distinct identities so B does not treat A as its own echo.
+	std::string id_err;
+	CHECK(a.set_dmr_id(3144613, id_err));
+	CHECK(b.set_dmr_id(3144614, id_err));
+	CHECK_EQ(a.dmr_id(), 3144613);
+	CHECK_EQ(b.dmr_id(), 3144614);
 
 	auto bus = std::make_shared<VirtualRfBus>();
 	a.attach_virtual_rf(bus, 0);

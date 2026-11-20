@@ -14,7 +14,9 @@
 #include <QFontDatabase>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QIntValidator>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QStatusBar>
@@ -126,11 +128,19 @@ void DualRadioWindow::buildPane(int side)
 	p.data = new QLabel(QStringLiteral("codeplug: -"), p.box);
 	p.status = new QLabel(QStringLiteral("stopped"), p.box);
 	p.pc = new QLabel(QStringLiteral("PC -"), p.box);
+	p.dmrId = new QLineEdit(p.box);
+	p.dmrId->setPlaceholderText(QStringLiteral("codeplug ID"));
+	p.dmrId->setValidator(new QIntValidator(1, 0xFFFFFF, p.dmrId));
+	p.dmrId->setToolTip(QStringLiteral("Optional own DMR ID; applied on Reset or firmware load."));
 	p.firmware->setTextInteractionFlags(Qt::TextSelectableByMouse);
 	p.data->setTextInteractionFlags(Qt::TextSelectableByMouse);
 	p.pc->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
 	layout->addWidget(p.firmware);
 	layout->addWidget(p.data);
+	auto *idRow = new QHBoxLayout();
+	idRow->addWidget(new QLabel(QStringLiteral("DMR ID:"), p.box));
+	idRow->addWidget(p.dmrId, 1);
+	layout->addLayout(idRow);
 	layout->addWidget(p.status);
 	layout->addWidget(p.pc);
 
@@ -145,6 +155,7 @@ void DualRadioWindow::buildPane(int side)
 	connect(fw, &QPushButton::clicked, this, [this, side] { openFirmware(side); });
 	connect(data, &QPushButton::clicked, this, [this, side] { openData(side); });
 	connect(reset, &QPushButton::clicked, this, [this, side] { reload(side); });
+	connect(p.dmrId, &QLineEdit::returnPressed, this, [this, side] { reload(side); });
 	connect(pause, &QPushButton::toggled, this, [this, side, pause](bool on) {
 		panes_[side].emu->setPaused(on);
 		pause->setText(on ? QStringLiteral("Resume") : QStringLiteral("Pause"));
@@ -192,12 +203,13 @@ void DualRadioWindow::chooseCodec()
 	setCodecBackup(path);
 }
 
-void DualRadioWindow::loadRadio(int side, const QString &firmware, const QString &dataBackup)
+void DualRadioWindow::loadRadio(int side, const QString &firmware, const QString &dataBackup, uint32_t dmrId)
 {
 	if (side < 0 || side > 1) return;
 	Pane &p = panes_[side];
 	p.firmwarePath = firmware;
 	if (!dataBackup.isNull()) p.dataPath = dataBackup;
+	if (dmrId != 0) p.dmrId->setText(QString::number(dmrId));
 	p.firmware->setText(QStringLiteral("firmware: ") + QFileInfo(firmware).fileName());
 	p.data->setText(p.dataPath.isEmpty() ? QStringLiteral("codeplug: built-in/default")
 					     : QStringLiteral("codeplug: ") + QFileInfo(p.dataPath).fileName());
@@ -239,9 +251,21 @@ void DualRadioWindow::reload(int side)
 {
 	Pane &p = panes_[side];
 	if (p.firmwarePath.isEmpty()) return;
+	uint32_t dmrId = 0;
+	const QString idText = p.dmrId->text().trimmed();
+	if (!idText.isEmpty()) {
+		bool ok = false;
+		dmrId = idText.toUInt(&ok);
+		if (!ok || dmrId == 0 || dmrId > 0xFFFFFF) {
+			p.status->setText(QStringLiteral("bad DMR ID"));
+			QMessageBox::warning(this, QStringLiteral("Bad DMR ID"),
+					     QStringLiteral("Use a decimal DMR ID between 1 and 16777215."));
+			return;
+		}
+	}
 	p.emu->stop();
 	QString error;
-	if (!p.emu->loadFirmware(p.firmwarePath, p.dataPath, codecBackup_, error)) {
+	if (!p.emu->loadFirmware(p.firmwarePath, p.dataPath, codecBackup_, error, dmrId)) {
 		p.status->setText(QStringLiteral("load failed: ") + error);
 		QMessageBox::critical(this, (side == 0 ? QStringLiteral("Radio A") : QStringLiteral("Radio B")) +
 						  QStringLiteral(" load failed"), error);

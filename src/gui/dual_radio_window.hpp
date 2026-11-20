@@ -14,6 +14,7 @@ class QCheckBox;
 class QComboBox;
 class QGroupBox;
 class QLabel;
+class QLineEdit;
 class QTimer;
 
 // Two independent radios with a shared virtual RF medium.
@@ -23,7 +24,7 @@ public:
 	~DualRadioWindow() override;
 
 	void setCodecBackup(const QString &path);
-	void loadRadio(int side, const QString &firmware, const QString &dataBackup = QString());
+	void loadRadio(int side, const QString &firmware, const QString &dataBackup = QString(), uint32_t dmrId = 0);
 	void loadRadioFromPath(int side, const QString &firmware);
 
 protected:
@@ -38,6 +39,7 @@ private:
 		QLabel *data = nullptr;
 		QLabel *status = nullptr;
 		QLabel *pc = nullptr;
+		QLineEdit *dmrId = nullptr;
 		QString firmwarePath;
 		QString dataPath;
 	};

@@ -35,6 +35,8 @@ public:
 	bool load_data_flash(const std::string &path, std::string &err);
 	bool install_codec_slot(const std::vector<uint8_t> &slot, std::string &err);
 	bool install_data_flash(const std::vector<uint8_t> &data, uint32_t offset, std::string &err);
+	bool set_dmr_id(uint32_t id, std::string &err);
+	uint32_t dmr_id() const;
 
 	uint8_t read8(uint32_t addr);
 	uint16_t read16(uint32_t addr);

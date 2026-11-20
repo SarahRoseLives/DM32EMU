@@ -33,7 +33,8 @@ public:
 	explicit EmulatorThread(QObject *parent = nullptr);
 	~EmulatorThread() override;
 
-	bool loadFirmware(const QString &path, const QString &dataBackup, const QString &codecBackup, QString &error);
+	bool loadFirmware(const QString &path, const QString &dataBackup, const QString &codecBackup, QString &error,
+			  uint32_t dmrId = 0);
 	void setKey(const QString &name, bool pressed);
 	void setPaused(bool paused) { paused_.store(paused); }
 	bool paused() const { return paused_.load(); }

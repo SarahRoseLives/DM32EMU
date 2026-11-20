@@ -828,6 +828,8 @@ int main(int argc, char **argv)
 	QCommandLineOption dataA(QStringLiteral("data-a"), QStringLiteral("Radio A codeplug/data backup."), QStringLiteral("file"));
 	QCommandLineOption dataB(QStringLiteral("data-b"), QStringLiteral("Radio B codeplug/data backup."), QStringLiteral("file"));
 	QCommandLineOption codec(QStringLiteral("codec"), QStringLiteral("Shared codec backup (program-memory.bin or ZIP)."), QStringLiteral("file"));
+	QCommandLineOption dmrIdA(QStringLiteral("dmr-id-a"), QStringLiteral("Radio A own DMR ID."), QStringLiteral("id"));
+	QCommandLineOption dmrIdB(QStringLiteral("dmr-id-b"), QStringLiteral("Radio B own DMR ID."), QStringLiteral("id"));
 	parser.addOption(dataFlash);
 	parser.addOption(screenshot);
 	parser.addOption(windowShot);
@@ -839,6 +841,8 @@ int main(int argc, char **argv)
 	parser.addOption(dataA);
 	parser.addOption(dataB);
 	parser.addOption(codec);
+	parser.addOption(dmrIdA);
+	parser.addOption(dmrIdB);
 	parser.process(app);
 
 	if (parser.isSet(dual)) {
@@ -848,10 +852,13 @@ int main(int argc, char **argv)
 		const QString ca = parser.value(codec);
 		const QString fa = parser.value(fwA), fb = parser.value(fwB);
 		const QString da = parser.value(dataA), db = parser.value(dataB);
-		QTimer::singleShot(0, w, [w, ca, fa, fb, da, db] {
+		bool ida_ok = false, idb_ok = false;
+		const uint32_t ida = parser.value(dmrIdA).toUInt(&ida_ok);
+		const uint32_t idb = parser.value(dmrIdB).toUInt(&idb_ok);
+		QTimer::singleShot(0, w, [w, ca, fa, fb, da, db, ida, idb, ida_ok, idb_ok] {
 			if (!ca.isEmpty()) w->setCodecBackup(ca);
-			if (!fa.isEmpty()) w->loadRadio(0, fa, da);
-			if (!fb.isEmpty()) w->loadRadio(1, fb, db);
+			if (!fa.isEmpty()) w->loadRadio(0, fa, da, ida_ok ? ida : 0);
+			if (!fb.isEmpty()) w->loadRadio(1, fb, db, idb_ok ? idb : 0);
 		});
 		if (parser.isSet(smoke)) QTimer::singleShot(200, &app, &QApplication::quit);
 		return app.exec();

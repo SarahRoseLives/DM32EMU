@@ -46,8 +46,8 @@ Verified with the open firmware images in the sibling trees:
 - **RadioFoundry** (`RadioFoundry/build/dm32/rfoundry_dm32.bin`): boot splash,
   its home screen, DMR channel display, and DMR voice calls between two
   emulated radios over the virtual HR_C7000 modem link. Load a codec backup to
-  decode/encode the DMR voice frames; the two radios need different DMR IDs in
-  their codeplugs.
+  decode/encode the DMR voice frames; give the two radios different DMR IDs
+  (separate codeplugs or the GUI/CLI override).
 - **DM32Mayhem** (`DM32Mayhem/firmware/build/diag/rfoundry_dm32.bin`): boot
   splash and its boot-gate screen, which asks for the displayed code.
 
@@ -95,9 +95,11 @@ to load an image. The toolbar has Open, Pause, Reset and Save screenshot.
 **File > Open dual radio** opens two radios sharing a virtual RF bus. Use
 **File > Open codec backup** to install a codec slot from `program-memory.bin`
 or a `DM32UV_Backup_*.zip`; the codec is shared by both radios in dual mode.
-The dual window has firmware and codeplug buttons for each radio, a virtual RF
-toggle, a TS1/TS2 selector, and live sent/delivered/dropped counters. Both
-radios must use the same DMR channel, timeslot and color code; set the RF
+The dual window has firmware and codeplug buttons for each radio, an optional
+per-radio DMR ID, a virtual RF toggle, a TS1/TS2 selector, and live
+sent/delivered/dropped counters. Set different DMR IDs for the two radios, or
+use `--dmr-id-a`/`--dmr-id-b`; this avoids editing a copy of the codeplug.
+Both radios must use the same DMR channel, timeslot and color code; set the RF
 timeslot to match the channel.
 
 ![DM32EMU dual-radio GUI](docs/dm32gui-dual.gif)
@@ -168,14 +170,13 @@ DM32EMU_TEST_CODEC=~/Documents/DM32UV_Backup.zip \
 # Boot two RadioFoundry radios, key A, check B's call
 DM32EMU_TEST_FIRMWARE=~/Projects/RadioFoundry/build/dm32/rfoundry_dm32.bin \
 DM32EMU_TEST_CODEC=~/Documents/DM32UV_Backup.zip \
-DM32EMU_TEST_DATA_A=~/Documents/codeplug-a.bin \
-DM32EMU_TEST_DATA_B=~/Documents/codeplug-b.bin \
+DM32EMU_TEST_DATA_A=~/Documents/codeplug.bin \
     ctest --test-dir build -R firmware_dual_rf --output-on-failure
 ```
 
-The dual test needs two codeplugs with different DMR IDs and the same DMR home
-channel. It reads the radio's `dmr.ts` and forces the virtual RF link to that
-timeslot.
+The dual test uses one codeplug for both radios and overrides their DMR IDs.
+`DM32EMU_TEST_DATA_B` is optional. It reads the radio's `dmr.ts` and forces
+the virtual RF link to that timeslot.
 
 ### Debugging options
 
@@ -193,6 +194,7 @@ timeslot.
 | `--data-flash FILE` | load a real 16 MB SPI NOR dump (calibration, codeplug) |
 | `--data-backup FILE` | load `data-memory.bin`, `original-channels.bin` or a 0x120000 codeplug |
 | `--codec-backup FILE` | install the DMR codec from a 1 MB `program-memory.bin` or backup ZIP |
+| `--dmr-id ID` | override the codeplug's own DMR ID |
 | `--uart-pty` | bridge UART0 to a new PTY and print its path |
 | `--uart-tcp PORT` | bridge UART0 to `127.0.0.1:PORT` (`0` picks a free port) |
 | `--no-idle-skip` | do not fast-forward the FreeRTOS idle loop |

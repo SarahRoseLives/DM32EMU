@@ -32,6 +32,7 @@ void usage(const char *argv0)
 		"  --data-flash FILE    load a raw 16 MB SPI NOR dump\n"
 		"  --data-backup FILE   load a data-memory.bin, stock channels or codeplug backup\n"
 		"  --codec-backup FILE  read a program-memory.bin or backup ZIP for the codec\n"
+		"  --dmr-id ID          override the codeplug's own DMR ID\n"
 		"  --steps N            instruction budget (default 500000000)\n"
 		"  --frames N           stop after N complete LCD frames\n"
 		"  --trace              print every instruction to stderr\n"
@@ -150,6 +151,7 @@ int main(int argc, char **argv)
 	std::string data_flash;
 	std::string data_backup;
 	std::string codec_backup;
+	uint32_t dmr_id = 0;
 	std::string fb_path;
 	std::string symbols_path;
 	uint64_t max_steps = 500000000ULL;
@@ -183,6 +185,8 @@ int main(int argc, char **argv)
 			data_backup = argv[++i];
 		} else if (a == "--codec-backup" && i + 1 < argc) {
 			codec_backup = argv[++i];
+		} else if (a == "--dmr-id" && i + 1 < argc) {
+			dmr_id = (uint32_t)parse_u64(argv[++i]);
 		} else if (a == "--fb" && i + 1 < argc) {
 			fb_path = argv[++i];
 		} else if (a == "--fb-every" && i + 1 < argc) {
@@ -270,6 +274,13 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		std::fprintf(stderr, "data backup: %zu bytes at 0x%06x\n", data.size(), offset);
+	}
+	if (dmr_id != 0) {
+		if (!machine.set_dmr_id(dmr_id, err)) {
+			std::fprintf(stderr, "dmr id: %s\n", err.c_str());
+			return 1;
+		}
+		std::fprintf(stderr, "dmr id: %u\n", dmr_id);
 	}
 
 	FirmwareInfo info;

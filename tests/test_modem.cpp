@@ -21,6 +21,13 @@ void sys_write(Machine &m, uint32_t off, uint32_t value) { m.write32(SYS_BASE + 
 int main()
 {
 	Machine tx;
+	std::string id_err;
+	CHECK(tx.set_dmr_id(3144614, id_err));
+	CHECK_EQ(tx.dmr_id(), 3144614);
+	CHECK(!tx.set_dmr_id(0, id_err));
+	CHECK(!tx.set_dmr_id(0x1000000u, id_err));
+	CHECK_EQ(tx.dmr_id(), 3144614);
+
 	sys_write(tx, 0x100, 0x6Eu);
 	CHECK_EQ(sys_read(tx, 0x100), 0x6Eu);
 	sys_write(tx, 0x384, 1);

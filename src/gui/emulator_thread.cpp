@@ -17,7 +17,8 @@ EmulatorThread::EmulatorThread(QObject *parent) : QThread(parent) {}
 
 EmulatorThread::~EmulatorThread() { stop(); }
 
-bool EmulatorThread::loadFirmware(const QString &path, const QString &dataBackup, const QString &codecBackup, QString &error)
+bool EmulatorThread::loadFirmware(const QString &path, const QString &dataBackup, const QString &codecBackup,
+				  QString &error, uint32_t dmrId)
 {
 	if (isRunning()) {
 		error = QStringLiteral("the emulator is still running");
@@ -35,6 +36,10 @@ bool EmulatorThread::loadFirmware(const QString &path, const QString &dataBackup
 			error = QString::fromStdString(err);
 			return false;
 		}
+	}
+	if (dmrId != 0 && !machine->set_dmr_id(dmrId, err)) {
+		error = QString::fromStdString(err);
+		return false;
 	}
 	FirmwareInfo info;
 	if (!load_firmware(*machine, path.toStdString(), info, err)) {

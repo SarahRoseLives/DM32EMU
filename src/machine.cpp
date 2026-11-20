@@ -245,6 +245,42 @@ bool Machine::install_data_flash(const std::vector<uint8_t> &data, uint32_t offs
 	return true;
 }
 
+bool Machine::set_dmr_id(uint32_t id, std::string &err)
+{
+	constexpr uint32_t off = 0x7000E8u; // codeplug EEPROM image, own ID
+	if (id == 0 || id > 0xFFFFFFu) {
+		err = "DMR ID must be between 1 and 16777215";
+		return false;
+	}
+	if (data_flash_.size() < off + 4) {
+		err = "data flash is too small for a codeplug ID";
+		return false;
+	}
+	uint8_t bcd[4];
+	uint32_t value = id;
+	for (int i = 3; i >= 0; i--) {
+		bcd[i] = (uint8_t)((value % 10u) | ((value / 10u % 10u) << 4));
+		value /= 100u;
+	}
+	std::copy(bcd, bcd + 4, data_flash_.begin() + off);
+	return true;
+}
+
+uint32_t Machine::dmr_id() const
+{
+	constexpr uint32_t off = 0x7000E8u;
+	if (data_flash_.size() < off + 4) return 0;
+	const uint8_t *p = data_flash_.data() + off;
+	uint32_t value = 0;
+	for (int i = 0; i < 4; i++) {
+		const uint8_t hi = (uint8_t)(p[i] >> 4);
+		const uint8_t lo = (uint8_t)(p[i] & 0x0Fu);
+		if (hi > 9 || lo > 9) return 0;
+		value = value * 100u + (uint32_t)(hi * 10u + lo);
+	}
+	return value;
+}
+
 bool Machine::load_data_flash(const std::string &path, std::string &err)
 {
 	std::ifstream f(path, std::ios::binary);
