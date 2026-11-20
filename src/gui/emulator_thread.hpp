@@ -4,6 +4,7 @@
 
 #include "cpu.hpp"
 #include "uart_bridge.hpp"
+#include "virtual_rf.hpp"
 
 #include <QByteArray>
 #include <QImage>
@@ -32,7 +33,7 @@ public:
 	explicit EmulatorThread(QObject *parent = nullptr);
 	~EmulatorThread() override;
 
-	bool loadFirmware(const QString &path, const QString &dataFlash, QString &error);
+	bool loadFirmware(const QString &path, const QString &dataBackup, const QString &codecBackup, QString &error);
 	void setKey(const QString &name, bool pressed);
 	void setPaused(bool paused) { paused_.store(paused); }
 	bool paused() const { return paused_.load(); }
@@ -49,6 +50,12 @@ public:
 	void clearBreakpoints();
 	void sendUart(const QByteArray &data);
 	void setIdleSkip(bool on) { idle_skip_enabled_.store(on); }
+	void setVirtualRf(std::shared_ptr<VirtualRfBus> bus, uint8_t id)
+	{
+		virtual_bus_ = std::move(bus);
+		virtual_id_ = id;
+	}
+	void setVirtualRfEnabled(bool on) { virtual_enabled_.store(on); }
 
 signals:
 	void frameReady(const QImage &image, quint64 frames);
@@ -88,6 +95,10 @@ private:
 	std::atomic<bool> stop_{false};
 	std::atomic<bool> paused_{false};
 	std::atomic<bool> idle_skip_enabled_{true};
+	std::atomic<bool> virtual_enabled_{false};
+	std::shared_ptr<VirtualRfBus> virtual_bus_;
+	uint8_t virtual_id_ = 0;
+	bool virtual_applied_ = false;
 
 	std::mutex queue_mutex_;
 	std::deque<std::pair<std::string, bool>> key_queue_;

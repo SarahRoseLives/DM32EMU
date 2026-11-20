@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Sarah Rose
 #include "emulator_thread.hpp"
 
+#include "codec_backup.hpp"
 #include "firmware.hpp"
 #include "machine.hpp"
 
@@ -16,7 +17,7 @@ EmulatorThread::EmulatorThread(QObject *parent) : QThread(parent) {}
 
 EmulatorThread::~EmulatorThread() { stop(); }
 
-bool EmulatorThread::loadFirmware(const QString &path, const QString &dataFlash, QString &error)
+bool EmulatorThread::loadFirmware(const QString &path, const QString &dataBackup, const QString &codecBackup, QString &error)
 {
 	if (isRunning()) {
 		error = QStringLiteral("the emulator is still running");
@@ -26,14 +27,33 @@ bool EmulatorThread::loadFirmware(const QString &path, const QString &dataFlash,
 	auto machine = std::make_unique<Machine>();
 	machine->set_uart_echo(false);
 	std::string err;
-	if (!dataFlash.isEmpty() && !machine->load_data_flash(dataFlash.toStdString(), err)) {
-		error = QString::fromStdString(err);
-		return false;
+	if (!dataBackup.isEmpty()) {
+		std::vector<uint8_t> data;
+		uint32_t offset = 0;
+		if (!load_data_backup(dataBackup.toStdString(), data, offset, err) ||
+		    !machine->install_data_flash(data, offset, err)) {
+			error = QString::fromStdString(err);
+			return false;
+		}
 	}
 	FirmwareInfo info;
 	if (!load_firmware(*machine, path.toStdString(), info, err)) {
 		error = QString::fromStdString(err);
 		return false;
+	}
+	if (!codecBackup.isEmpty()) {
+		std::vector<uint8_t> slot;
+		CodecBackupInfo ci;
+		if (!build_codec_slot(codecBackup.toStdString(), slot, ci, err) ||
+		    !machine->install_codec_slot(slot, err)) {
+			error = QString::fromStdString(err);
+			return false;
+		}
+	}
+	if (virtual_bus_) {
+		machine->attach_virtual_rf(virtual_bus_, virtual_id_);
+		machine->set_virtual_rf_enabled(virtual_enabled_.load());
+		virtual_applied_ = virtual_enabled_.load();
 	}
 	auto cpu = std::make_unique<Cpu>(*machine);
 	cpu->reset(info.entry);
@@ -365,6 +385,10 @@ void EmulatorThread::run()
 	};
 
 	while (!stop_.load()) {
+		if (virtual_bus_ && virtual_enabled_.load() != virtual_applied_) {
+			virtual_applied_ = virtual_enabled_.load();
+			machine_->set_virtual_rf_enabled(virtual_applied_);
+		}
 		const bool want_idle = idle_skip_enabled_.load();
 		if (want_idle != idle_skip_applied_) {
 			idle_skip_applied_ = want_idle;

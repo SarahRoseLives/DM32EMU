@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Sarah Rose
 #include "elf.hpp"
+#include "dual_radio_window.hpp"
 #include "emulator_thread.hpp"
 #include "radio_widget.hpp"
 
@@ -153,6 +154,7 @@ private:
 	void createDebugDock();
 	void openFirmware();
 	void openDataFlash();
+	void openCodecBackup();
 	void saveScreenshot();
 	void togglePause(bool paused);
 	void resetEmulator();
@@ -193,6 +195,7 @@ private:
 
 	QString firmware_;
 	QString data_flash_;
+	QString codec_backup_;
 	QString symbols_path_;
 	QImage last_frame_;
 	QString screenshot_path_;
@@ -248,8 +251,20 @@ void MainWindow::createActions()
 	open->setShortcut(QKeySequence::Open);
 	connect(open, &QAction::triggered, this, &MainWindow::openFirmware);
 
-	auto *openFlash = new QAction(QStringLiteral("Open &data flash..."), this);
+	auto *openFlash = new QAction(QStringLiteral("Open &data/codeplug backup..."), this);
 	connect(openFlash, &QAction::triggered, this, &MainWindow::openDataFlash);
+
+	auto *openCodec = new QAction(QStringLiteral("Open codec &backup..."), this);
+	connect(openCodec, &QAction::triggered, this, &MainWindow::openCodecBackup);
+
+	auto *dual = new QAction(QStringLiteral("Open &dual radio..."), this);
+	connect(dual, &QAction::triggered, this, [this] {
+		auto *w = new DualRadioWindow;
+		w->setAttribute(Qt::WA_DeleteOnClose);
+		if (!codec_backup_.isEmpty()) w->setCodecBackup(codec_backup_);
+		if (!firmware_.isEmpty()) w->loadRadio(0, firmware_, data_flash_);
+		w->show();
+	});
 
 	auto *shot = new QAction(QStringLiteral("&Save screenshot..."), this);
 	shot->setShortcut(QKeySequence::Save);
@@ -298,6 +313,8 @@ void MainWindow::createActions()
 	QMenu *file = menuBar()->addMenu(QStringLiteral("&File"));
 	file->addAction(open);
 	file->addAction(openFlash);
+	file->addAction(openCodec);
+	file->addAction(dual);
 	file->addAction(shot);
 	file->addSeparator();
 	file->addAction(quit);
@@ -472,7 +489,7 @@ void MainWindow::loadFirmware(const QString &path)
 {
 	emulator_.stop();
 	QString error;
-	if (!emulator_.loadFirmware(path, data_flash_, error)) {
+	if (!emulator_.loadFirmware(path, data_flash_, codec_backup_, error)) {
 		QMessageBox::critical(this, QStringLiteral("Cannot load firmware"), error);
 		statusBar()->showMessage(QStringLiteral("Load failed"), 5000);
 		return;
@@ -553,10 +570,22 @@ void MainWindow::openDataFlash()
 {
 	const QString path = QFileDialog::getOpenFileName(
 		this, QStringLiteral("Open 16 MB SPI NOR dump"), QDir::homePath(),
-		QStringLiteral("Flash dumps (*.bin *.flash);;All files (*)"));
+		QStringLiteral("Radio backups (*.zip *.bin);;All files (*)"));
 	if (path.isEmpty()) return;
 	data_flash_ = path;
 	statusBar()->showMessage(QStringLiteral("Data flash: ") + path, 5000);
+	if (!firmware_.isEmpty()) loadFirmware(firmware_);
+}
+
+void MainWindow::openCodecBackup()
+{
+	const QString path = QFileDialog::getOpenFileName(
+		this, QStringLiteral("Open codec backup (program-memory.bin or backup ZIP)"),
+		QDir::homePath() + QStringLiteral("/Documents"),
+		QStringLiteral("Backups (*.zip *.bin);;All files (*)"));
+	if (path.isEmpty()) return;
+	codec_backup_ = path;
+	statusBar()->showMessage(QStringLiteral("Codec backup: ") + path, 5000);
 	if (!firmware_.isEmpty()) loadFirmware(firmware_);
 }
 
@@ -793,12 +822,40 @@ int main(int argc, char **argv)
 				  QStringLiteral("n"), QStringLiteral("3"));
 	QCommandLineOption smoke(QStringLiteral("smoke-test"),
 				 QStringLiteral("Start the window and exit; used by CTest."));
+	QCommandLineOption dual(QStringLiteral("dual"), QStringLiteral("Open the dual-radio window."));
+	QCommandLineOption fwA(QStringLiteral("firmware-a"), QStringLiteral("Radio A firmware."), QStringLiteral("file"));
+	QCommandLineOption fwB(QStringLiteral("firmware-b"), QStringLiteral("Radio B firmware."), QStringLiteral("file"));
+	QCommandLineOption dataA(QStringLiteral("data-a"), QStringLiteral("Radio A codeplug/data backup."), QStringLiteral("file"));
+	QCommandLineOption dataB(QStringLiteral("data-b"), QStringLiteral("Radio B codeplug/data backup."), QStringLiteral("file"));
+	QCommandLineOption codec(QStringLiteral("codec"), QStringLiteral("Shared codec backup (program-memory.bin or ZIP)."), QStringLiteral("file"));
 	parser.addOption(dataFlash);
 	parser.addOption(screenshot);
 	parser.addOption(windowShot);
 	parser.addOption(frames);
 	parser.addOption(smoke);
+	parser.addOption(dual);
+	parser.addOption(fwA);
+	parser.addOption(fwB);
+	parser.addOption(dataA);
+	parser.addOption(dataB);
+	parser.addOption(codec);
 	parser.process(app);
+
+	if (parser.isSet(dual)) {
+		auto *w = new DualRadioWindow;
+		w->setAttribute(Qt::WA_DeleteOnClose);
+		w->show();
+		const QString ca = parser.value(codec);
+		const QString fa = parser.value(fwA), fb = parser.value(fwB);
+		const QString da = parser.value(dataA), db = parser.value(dataB);
+		QTimer::singleShot(0, w, [w, ca, fa, fb, da, db] {
+			if (!ca.isEmpty()) w->setCodecBackup(ca);
+			if (!fa.isEmpty()) w->loadRadio(0, fa, da);
+			if (!fb.isEmpty()) w->loadRadio(1, fb, db);
+		});
+		if (parser.isSet(smoke)) QTimer::singleShot(200, &app, &QApplication::quit);
+		return app.exec();
+	}
 
 	MainWindow window;
 	window.show();

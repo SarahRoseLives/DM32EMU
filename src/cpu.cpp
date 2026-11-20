@@ -82,6 +82,7 @@ void Cpu::take_irq(int source)
 	epsr_ = psr_value();
 	psr_ = (psr_ & ~(PSR_VEC | PSR_IE | PSR_EE | PSR_AF)) | PSR_S | (vector << 16);
 	pc_ = bus_.read_vector(vector) & ~1u;
+	if (source >= 29 && source <= 33) bus_.clear_irq(source);
 }
 
 bool Cpu::fetch(uint32_t pc, uint32_t &insn, uint8_t &len)

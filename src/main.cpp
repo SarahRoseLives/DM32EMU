@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Sarah Rose
 #include "cpu.hpp"
 #include "elf.hpp"
+#include "codec_backup.hpp"
 #include "firmware.hpp"
 #include "machine.hpp"
 #include "uart_bridge.hpp"
@@ -28,7 +29,9 @@ void usage(const char *argv0)
 		"\n"
 		"FIRMWARE is a raw image linked for 0x0300c000 or a C-SKY ELF file.\n"
 		"\n"
-		"  --data-flash FILE    load a 16 MB SPI NOR dump\n"
+		"  --data-flash FILE    load a raw 16 MB SPI NOR dump\n"
+		"  --data-backup FILE   load a data-memory.bin, stock channels or codeplug backup\n"
+		"  --codec-backup FILE  read a program-memory.bin or backup ZIP for the codec\n"
 		"  --steps N            instruction budget (default 500000000)\n"
 		"  --frames N           stop after N complete LCD frames\n"
 		"  --trace              print every instruction to stderr\n"
@@ -145,6 +148,8 @@ int main(int argc, char **argv)
 {
 	std::string firmware;
 	std::string data_flash;
+	std::string data_backup;
+	std::string codec_backup;
 	std::string fb_path;
 	std::string symbols_path;
 	uint64_t max_steps = 500000000ULL;
@@ -174,6 +179,10 @@ int main(int argc, char **argv)
 			stop_frames = parse_u64(argv[++i]);
 		} else if (a == "--data-flash" && i + 1 < argc) {
 			data_flash = argv[++i];
+		} else if (a == "--data-backup" && i + 1 < argc) {
+			data_backup = argv[++i];
+		} else if (a == "--codec-backup" && i + 1 < argc) {
+			codec_backup = argv[++i];
 		} else if (a == "--fb" && i + 1 < argc) {
 			fb_path = argv[++i];
 		} else if (a == "--fb-every" && i + 1 < argc) {
@@ -252,6 +261,16 @@ int main(int argc, char **argv)
 		std::fprintf(stderr, "%s\n", err.c_str());
 		return 1;
 	}
+	if (!data_backup.empty()) {
+		std::vector<uint8_t> data;
+		uint32_t offset = 0;
+		if (!load_data_backup(data_backup, data, offset, err) ||
+		    !machine.install_data_flash(data, offset, err)) {
+			std::fprintf(stderr, "data backup: %s\n", err.c_str());
+			return 1;
+		}
+		std::fprintf(stderr, "data backup: %zu bytes at 0x%06x\n", data.size(), offset);
+	}
 
 	FirmwareInfo info;
 	if (!load_firmware(machine, firmware, info, err)) {
@@ -260,6 +279,18 @@ int main(int argc, char **argv)
 	}
 	const uint32_t entry = info.entry;
 	if (info.elf && symbols_path.empty()) symbols_path = firmware;
+
+	if (!codec_backup.empty()) {
+		std::vector<uint8_t> slot;
+		CodecBackupInfo ci;
+		if (!build_codec_slot(codec_backup, slot, ci, err) ||
+		    !machine.install_codec_slot(slot, err)) {
+			std::fprintf(stderr, "codec backup: %s\n", err.c_str());
+		} else {
+			std::fprintf(stderr, "codec backup: %s, tag %u, %u bytes\n", ci.profile.c_str(), ci.tag,
+				     (unsigned)ci.code_len);
+		}
+	}
 
 	SymTab symtab;
 	if (!symbols_path.empty()) {

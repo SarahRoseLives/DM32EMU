@@ -11,7 +11,9 @@ If this is useful, you can support the work: **[Donate](https://sarahsforge.dev/
 
 It boots the P32 image to its home screen and menu, renders the LCD to a
 PPM/PNG, prints the firmware's UART output, and supports scripted key presses,
-breakpoints, memory dumps, symbols and instruction tracing.
+breakpoints, memory dumps, symbols and instruction tracing. The GUI can run
+two radios side by side with a virtual RF link between their HR_C7000 modems,
+and it can install the DMR codec slot from a vendor backup.
 
 There is also a Qt GUI (`dm32gui`) with the radio's screen and a clickable
 keypad. Open a firmware image, then use the mouse or the keyboard to press
@@ -27,9 +29,9 @@ cmake --build build
 ```
 
 This builds the command-line emulator `build/dm32emu`. If Qt6 Widgets is
-available, it also builds the GUI `build/dm32gui`. No C-SKY toolchain is
-needed at run time. An ELF is only used for symbols; the emulator executes the
-application image itself.
+available, it also builds the GUI `build/dm32gui`. ZLIB is required for reading
+backup ZIPs. No C-SKY toolchain is needed at run time. An ELF is only used for
+symbols; the emulator executes the application image itself.
 
 The build uses `-O3`, link-time optimization and, by default, `-march=native`.
 Pass `-DDM32EMU_NATIVE=OFF` to CMake for a portable build.
@@ -41,8 +43,11 @@ Verified with the open firmware images in the sibling trees:
 - **P32** (`P32/build/dm32/rfoundry_dm32.bin`): boot splash, home screen and
   the main menu. Scripted keys (`ok`, arrows, numbers, PTT, side keys) drive
   the UI.
-- **RadioFoundry** (`RadioFoundry/build/dm32/rfoundry_dm32.bin`): boot splash
-  and its home screen.
+- **RadioFoundry** (`RadioFoundry/build/dm32/rfoundry_dm32.bin`): boot splash,
+  its home screen, DMR channel display, and DMR voice calls between two
+  emulated radios over the virtual HR_C7000 modem link. Load a codec backup to
+  decode/encode the DMR voice frames; the two radios need different DMR IDs in
+  their codeplugs.
 - **DM32Mayhem** (`DM32Mayhem/firmware/build/diag/rfoundry_dm32.bin`): boot
   splash and its boot-gate screen, which asks for the displayed code.
 
@@ -53,9 +58,9 @@ probes the emulated SPI NOR and display, and the LCD is rendered.
 The stock Baofeng firmware is a different case: it checks the ALPU chip and
 needs emulator-only patches, so it is not a target of this project.
 
-Not modelled: RF/modem data paths, AMBE audio, the FD6818 RF chip, USB, SDIO,
-the ALPU authentication chip, and the codec's DSP. These are only register
-stubs. The emulator is not cycle-accurate.
+Not modelled: the FD6818 RF/analog path, microphone/speaker PCM, USB, SDIO,
+the ALPU authentication chip, and execution of the codec's DSP. The emulator
+is not cycle-accurate.
 
 ## Run
 
@@ -79,10 +84,22 @@ Use `--no-idle-skip` for timing-faithful runs; see [Performance](#performance).
 ./build/dm32gui
 ./build/dm32gui /path/to/rfoundry_dm32.bin
 ./build/dm32gui /path/to/rfoundry_dm32.bin --data-flash /path/to/dump.bin
+./build/dm32gui --dual \
+    --firmware-a A.bin --firmware-b B.bin \
+    --data-a channels-a.bin --data-b channels-b.bin \
+    --codec program-memory.bin
 ```
 
 The GUI opens with the radio screen and keypad. Use **File > Open firmware**
 to load an image. The toolbar has Open, Pause, Reset and Save screenshot.
+**File > Open dual radio** opens two radios sharing a virtual RF bus. Use
+**File > Open codec backup** to install a codec slot from `program-memory.bin`
+or a `DM32UV_Backup_*.zip`; the codec is shared by both radios in dual mode.
+The dual window has firmware and codeplug buttons for each radio, a virtual RF
+toggle, and live sent/delivered/dropped counters. Both radios must use the same
+DMR channel, timeslot and color code.
+
+![DM32EMU dual-radio GUI](docs/dm32gui-dual.gif)
 
 ![DM32EMU GUI demo](docs/dm32gui.gif)
 The keypad is clickable, and these keyboard keys map to the radio:
@@ -144,6 +161,8 @@ number of full LCD frames.
 | `--fb FILE` | write the LCD as a binary PPM on exit |
 | `--fb-every N` | write `FILE.<frame>.ppm` every `N` frames |
 | `--data-flash FILE` | load a real 16 MB SPI NOR dump (calibration, codeplug) |
+| `--data-backup FILE` | load `data-memory.bin`, `original-channels.bin` or a 0x120000 codeplug |
+| `--codec-backup FILE` | install the DMR codec from a 1 MB `program-memory.bin` or backup ZIP |
 | `--uart-pty` | bridge UART0 to a new PTY and print its path |
 | `--uart-tcp PORT` | bridge UART0 to `127.0.0.1:PORT` (`0` picks a free port) |
 | `--no-idle-skip` | do not fast-forward the FreeRTOS idle loop |
@@ -185,11 +204,13 @@ Python/Pillow.
 ```
 src/main.cpp       CLI, symbol table, breakpoints, key schedule, run loop
 src/cpu.cpp/.hpp   C-SKY ABIv2 CK803S interpreter
-src/machine.cpp    memory map, PIC, timers, GPIO/keypad, UART, SPI NOR, LCD
+src/machine.cpp    memory map, PIC, timers, GPIO/keypad, UART, SPI NOR, LCD, HR_C7000 modem
 src/elf.cpp        ELF32 loader and symbol reader
 src/firmware.cpp   shared .bin/.elf firmware loader
+src/codec_backup.cpp  backup ZIP/program-memory reader and codec slot builder
+src/virtual_rf.cpp  shared burst bus for two or more emulated radios
 src/uart_bridge.cpp  UART0 to PTY/TCP bridge for the debug link and CPS tools
-src/gui/           Qt6 GUI: worker thread, radio/keypad widget, main window
+src/gui/           Qt6 GUI: worker thread, radio widget, single and dual windows
 ```
 
 The `Machine` class is the bus. RAM, program flash, system SRAM and modem RAM

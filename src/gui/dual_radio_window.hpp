@@ -1,0 +1,61 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Sarah Rose
+#pragma once
+
+#include "virtual_rf.hpp"
+
+#include <QMainWindow>
+#include <QString>
+#include <memory>
+
+class RadioWidget;
+class EmulatorThread;
+class QCheckBox;
+class QGroupBox;
+class QLabel;
+class QTimer;
+
+// Two independent radios with a shared virtual RF medium.
+class DualRadioWindow : public QMainWindow {
+public:
+	explicit DualRadioWindow(QWidget *parent = nullptr);
+	~DualRadioWindow() override;
+
+	void setCodecBackup(const QString &path);
+	void loadRadio(int side, const QString &firmware, const QString &dataBackup = QString());
+	void loadRadioFromPath(int side, const QString &firmware);
+
+protected:
+	void closeEvent(QCloseEvent *event) override;
+
+private:
+	struct Pane {
+		QGroupBox *box = nullptr;
+		RadioWidget *radio = nullptr;
+		EmulatorThread *emu = nullptr;
+		QLabel *firmware = nullptr;
+		QLabel *data = nullptr;
+		QLabel *status = nullptr;
+		QLabel *pc = nullptr;
+		QString firmwarePath;
+		QString dataPath;
+	};
+
+	void buildUi();
+	void buildPane(int side);
+	void openFirmware(int side);
+	void openData(int side);
+	void reload(int side);
+	void reloadAll();
+	void chooseCodec();
+	void updateLinkStats();
+	void setCodecLabel();
+
+	std::shared_ptr<VirtualRfBus> bus_;
+	Pane panes_[2];
+	QString codecBackup_;
+	QCheckBox *linkToggle_ = nullptr;
+	QLabel *linkStats_ = nullptr;
+	QLabel *codecLabel_ = nullptr;
+	QTimer *statsTimer_ = nullptr;
+};

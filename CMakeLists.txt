@@ -9,6 +9,8 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
 
+find_package(ZLIB REQUIRED)
+
 add_compile_options(-Wall -Wextra -Wpedantic -O3)
 
 option(DM32EMU_NATIVE "Build for this host CPU (-march=native)" ON)
@@ -24,11 +26,14 @@ endif()
 add_library(dm32core STATIC
   src/elf.cpp
   src/firmware.cpp
+  src/codec_backup.cpp
   src/cpu.cpp
   src/machine.cpp
+  src/virtual_rf.cpp
   src/uart_bridge.cpp
 )
 target_include_directories(dm32core PUBLIC src)
+target_link_libraries(dm32core PUBLIC ZLIB::ZLIB)
 
 add_executable(dm32emu src/main.cpp)
 target_link_libraries(dm32emu PRIVATE dm32core)
@@ -43,6 +48,7 @@ if(Qt6Widgets_FOUND)
     src/gui/main_gui.cpp
     src/gui/radio_widget.cpp
     src/gui/emulator_thread.cpp
+    src/gui/dual_radio_window.cpp
   )
   target_include_directories(dm32gui PRIVATE src/gui)
   target_link_libraries(dm32gui PRIVATE dm32core Qt6::Widgets)
