@@ -12,8 +12,8 @@ If this is useful, you can support the work: **[Donate](https://sarahsforge.dev/
 It boots the P32 image to its home screen and menu, renders the LCD to a
 PPM/PNG, prints the firmware's UART output, and supports scripted key presses,
 breakpoints, memory dumps, symbols and instruction tracing. The GUI can run
-two radios side by side with a virtual RF link between their HR_C7000 modems,
-and it can install the DMR codec slot from a vendor backup.
+two radios side by side over one mode-blind IQ channel, and it can install the
+DMR codec slot from a vendor backup.
 
 There is also a Qt GUI (`dm32gui`) with the radio's screen and a clickable
 keypad. Open a firmware image, then use the mouse or the keyboard to press
@@ -58,9 +58,10 @@ probes the emulated SPI NOR and display, and the LCD is rendered.
 The stock Baofeng firmware is a different case: it checks the ALPU chip and
 needs emulator-only patches, so it is not a target of this project.
 
-Not modelled: the FD6818 RF/analog path, microphone/speaker PCM, USB, SDIO,
-the ALPU authentication chip, and execution of the codec's DSP. The emulator
-is not cycle-accurate.
+Not modelled: the FD6818 analog RF path, the external audio amplifier, USB,
+SDIO, the ALPU authentication chip, and execution of the codec's DSP. The
+FD6818 register bus, PLL-lock/RSSI/noise reads, PCM buffers and a basic FM
+audio bridge are emulated. The emulator is not cycle-accurate.
 
 ## Run
 
@@ -96,12 +97,12 @@ to load an image. The toolbar has Open, Pause, Reset and Save screenshot.
 **File > Open codec backup** to install a codec slot from `program-memory.bin`
 or a `DM32UV_Backup_*.zip`; the codec is shared by both radios in dual mode.
 The dual window has firmware and codeplug buttons for each radio, an optional
-per-radio DMR ID, a virtual RF toggle, a TS1/TS2 selector, and live
+per-radio DMR ID, one virtual IQ link toggle, a DMR timeslot selector, and live
 sent/delivered/dropped counters. It remembers the last codec, firmware and
 codeplug paths, DMR IDs, RF timeslot and link state. Set different DMR IDs for the two radios, or
 use `--dmr-id-a`/`--dmr-id-b`; this avoids editing a copy of the codeplug.
-Both radios must use the same DMR channel, timeslot and color code; set the RF
-timeslot to match the channel.
+Both radios must use the same DMR channel and color code; select the channel's
+DMR timeslot on the shared link.
 
 ![DM32EMU dual-radio GUI](docs/dm32gui-dual.gif)
 
@@ -158,7 +159,8 @@ ctest --test-dir build --output-on-failure
 ```
 
 This runs the CPU smoke test, the offscreen GUI test, and unit tests for the
-virtual RF bus, the modem TX/RX paths, and backup/codec handling.
+IQ RF channel, C4FM/FM front ends, the modem TX/RX paths, and backup/codec
+handling.
 
 Two integration tests use local fixtures and are skipped when their environment
 variables are absent:
@@ -176,8 +178,8 @@ DM32EMU_TEST_DATA_A=~/Documents/codeplug.bin \
 ```
 
 The dual test uses one codeplug for both radios and overrides their DMR IDs.
-`DM32EMU_TEST_DATA_B` is optional. It reads the radio's `dmr.ts` and forces
-the virtual RF link to that timeslot.
+`DM32EMU_TEST_DATA_B` is optional. It reads the radio's `dmr.ts` and applies
+that DMR timeslot to the IQ link.
 
 ### Debugging options
 
@@ -238,11 +240,11 @@ Python/Pillow.
 src/main.cpp       CLI, symbol table, breakpoints, key schedule, run loop
 src/cpu.cpp/.hpp   C-SKY ABIv2 CK803S interpreter
 src/machine.cpp    memory map, PIC, timers, GPIO/keypad, UART, SPI NOR, LCD
-src/hr_c7000_modem.cpp  HR_C7000 DMR registers, slot timing and virtual RF bridge
+src/hr_c7000_modem.cpp  HR_C7000 modem registers, PHY slot timing and audio path
 src/elf.cpp        ELF32 loader and symbol reader
 src/firmware.cpp   shared .bin/.elf firmware loader
 src/codec_backup.cpp  backup ZIP/program-memory reader and codec slot builder
-src/rf_channel.cpp  mode-blind IQ channel shared by two or more emulated radios
+src/rf_channel.cpp  mode-blind IQ channel with a shared sample timeline and impairments
 src/uart_bridge.cpp  UART0 to PTY/TCP bridge for the debug link and CPS tools
 src/gui/           Qt6 GUI: worker thread, radio widget, single and dual windows
 tests/             unit tests and opt-in firmware/codec integration tests
@@ -272,6 +274,8 @@ operations. The DSP/FPU extensions are not implemented.
 - **UART0/1:** 16550-style registers; UART0 is the host/programming port.
 - **SPI NOR:** 16 MB GD25Q128-class chip, JEDEC/UID/read/program/erase.
 - **LCD:** i8080 controller driving an ST7789-class 240x320 RGB565 panel.
+- **FD6818:** three-wire register bus, frequency/mode state, PLL lock, RSSI/noise and a basic FD6818/FM audio path.
+- **Audio:** microphone PCM injection, speaker PCM capture and a host audio sink.
 - **Watchdog, ADC, DAC, PWM, I2C2/RTC:** register-level stubs.
 
 ## Adding a peripheral

@@ -34,6 +34,7 @@ public:
 	void set_phy_end_sink(std::function<void()> sink) { phy_end_sink_ = std::move(sink); }
 	void inject_discriminator_samples(const int16_t *samples, size_t count);
 	bool pcm_mic_enabled() const { return (audio_control_ & (1u << 4)) != 0; }
+	bool fm_tx_active() const { return fm_tx_; }
 
 private:
 	void capture_tx(uint64_t apb_cycles);
@@ -62,6 +63,7 @@ private:
 	PhySink phy_sink_;
 	std::function<void()> phy_end_sink_;
 	uint32_t audio_control_ = 0;
+	bool fm_tx_ = false;
 	uint8_t ts_override_ = 0;
 	uint8_t fm_addr_sw_ = 0;
 	uint8_t fm_half_ = 0;

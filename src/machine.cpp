@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <fstream>
 
 namespace {
@@ -139,6 +140,45 @@ void Machine::receive_dibits(const uint8_t *dibits, size_t count)
 	}
 }
 
+void Machine::inject_microphone_samples(const int16_t *samples, size_t count)
+{
+	if (samples == nullptr) return;
+	mic_fifo_.insert(mic_fifo_.end(), samples, samples + count);
+}
+
+void Machine::fill_microphone()
+{
+	for (uint32_t i = 0; i < 80; i++) {
+		int16_t sample;
+		if (!mic_fifo_.empty()) {
+			sample = mic_fifo_.front();
+			mic_fifo_.pop_front();
+		} else {
+			sample = (int16_t)(8000.0 * std::sin(2.0 * M_PI * 1000.0 * pcm_phase_ / 8000.0));
+			pcm_phase_ = (pcm_phase_ + 1u) % 8000u;
+		}
+		write16(SYS_SRAM_BASE + 2u * i, (uint16_t)sample);
+	}
+	pic_raise(28);
+}
+
+void Machine::speaker_pcm_byte(uint32_t offset, uint8_t value)
+{
+	if (offset < 0xA0u || offset >= 0xA0u + speaker_pcm_.size()) return;
+	speaker_pcm_[offset - 0xA0u] = value;
+	if (offset + 1u == 0xA0u + speaker_pcm_.size()) {
+		if (audio_sink_) {
+			int16_t out[80];
+			for (size_t i = 0; i < 80; i++)
+				out[i] = (int16_t)(speaker_pcm_[2 * i] | (speaker_pcm_[2 * i + 1] << 8));
+			audio_sink_(out, 80);
+		}
+		speaker_pcm_len_ = 0;
+	} else if (offset - 0xA0u + 1u > speaker_pcm_len_) {
+		speaker_pcm_len_ = offset - 0xA0u + 1u;
+	}
+}
+
 void Machine::attach_iq_channel(std::shared_ptr<VirtualRfIqChannel> channel, uint8_t id)
 {
 	if (iq_channel_) iq_channel_->remove_receiver(iq_id_);
@@ -147,6 +187,7 @@ void Machine::attach_iq_channel(std::shared_ptr<VirtualRfIqChannel> channel, uin
 	if (!iq_channel_) {
 		air_.reset();
 		packet_.reset();
+		fm_.reset();
 		modem_.set_burst_sink({});
 		modem_.set_phy_block_sink({});
 		modem_.set_phy_end_sink({});
@@ -155,14 +196,21 @@ void Machine::attach_iq_channel(std::shared_ptr<VirtualRfIqChannel> channel, uin
 	iq_channel_->add_receiver(id);
 	air_ = std::make_unique<C4fmFrontend>();
 	air_->set_iq_sink([this](const IqSample *samples, size_t count) {
-		if (iq_enabled_ && iq_channel_) iq_channel_->transmit(iq_id_, samples, count);
+		if (iq_enabled_ && iq_channel_) iq_channel_->transmit(iq_id_, samples, count, rf_sample_time_);
 	});
 	air_->set_discriminator_sink([this](const int16_t *samples, size_t count) {
 		modem_.inject_discriminator_samples(samples, count);
 	});
+	fm_ = std::make_unique<FmFrontend>();
+	fm_->set_iq_sink([this](const IqSample *samples, size_t count) {
+		if (iq_enabled_ && iq_channel_) iq_channel_->transmit(iq_id_, samples, count, rf_sample_time_);
+	});
+	fm_->set_audio_sink([this](const int16_t *samples, size_t count) {
+		if (audio_sink_) audio_sink_(samples, count);
+	});
 	packet_ = std::make_unique<PacketFrontend>();
 	packet_->set_iq_sink([this](const IqSample *samples, size_t count) {
-		if (iq_enabled_ && iq_channel_) iq_channel_->transmit(iq_id_, samples, count);
+		if (iq_enabled_ && iq_channel_) iq_channel_->transmit(iq_id_, samples, count, rf_sample_time_);
 	});
 	packet_->set_dibit_sink([this](const uint8_t *dibits, size_t count) {
 		receive_dibits(dibits, count);
@@ -236,6 +284,11 @@ void Machine::reset()
 	i2c2_ = {};
 	i2c2_.regs[0x11] = 0x07;
 	i2c2_.regs[0x12] = 0x01;
+	fd_ = {};
+	mic_fifo_.clear();
+	speaker_pcm_ = {};
+	speaker_pcm_len_ = 0;
+	fm_tx_next_apb_ = 0;
 }
 
 bool Machine::load_elf_image(const ElfImage &image, std::string &err)
@@ -400,7 +453,7 @@ void Machine::write8(uint32_t addr, uint8_t value)
 {
 	if (addr < RAM_SIZE) { ram_[addr] = value; return; }
 	if (in(addr, FLASH_BASE, FLASH_SIZE)) { flash_[addr - FLASH_BASE] = value; return; }
-	if (in(addr, SYS_SRAM_BASE, SYS_SRAM_SIZE)) { sys_sram_[addr - SYS_SRAM_BASE] = value; return; }
+	if (in(addr, SYS_SRAM_BASE, SYS_SRAM_SIZE)) { sys_sram_[addr - SYS_SRAM_BASE] = value; speaker_pcm_byte(addr - SYS_SRAM_BASE, value); return; }
 	if (in(addr, MODEM_RAM_BASE, MODEM_RAM_SIZE)) { modem_ram_[addr - MODEM_RAM_BASE] = value; return; }
 	mmio_write(addr, value, 1);
 }
@@ -409,7 +462,12 @@ void Machine::write16(uint32_t addr, uint16_t value)
 {
 	if (addr + 1 < RAM_SIZE) { wr16le(ram_.data() + addr, value); return; }
 	if (in(addr, FLASH_BASE, FLASH_SIZE - 1)) { wr16le(flash_.data() + (addr - FLASH_BASE), value); return; }
-	if (in(addr, SYS_SRAM_BASE, SYS_SRAM_SIZE - 1)) { wr16le(sys_sram_.data() + (addr - SYS_SRAM_BASE), value); return; }
+	if (in(addr, SYS_SRAM_BASE, SYS_SRAM_SIZE - 1)) {
+		wr16le(sys_sram_.data() + (addr - SYS_SRAM_BASE), value);
+		speaker_pcm_byte(addr - SYS_SRAM_BASE, (uint8_t)value);
+		speaker_pcm_byte(addr - SYS_SRAM_BASE + 1u, (uint8_t)(value >> 8));
+		return;
+	}
 	if (in(addr, MODEM_RAM_BASE, MODEM_RAM_SIZE - 1)) { wr16le(modem_ram_.data() + (addr - MODEM_RAM_BASE), value); return; }
 	mmio_write(addr, value, 2);
 }
@@ -418,7 +476,11 @@ void Machine::write32(uint32_t addr, uint32_t value)
 {
 	if (addr + 3 < RAM_SIZE) { wr32le(ram_.data() + addr, value); return; }
 	if (in(addr, FLASH_BASE, FLASH_SIZE - 3)) { wr32le(flash_.data() + (addr - FLASH_BASE), value); return; }
-	if (in(addr, SYS_SRAM_BASE, SYS_SRAM_SIZE - 3)) { wr32le(sys_sram_.data() + (addr - SYS_SRAM_BASE), value); return; }
+	if (in(addr, SYS_SRAM_BASE, SYS_SRAM_SIZE - 3)) {
+		wr32le(sys_sram_.data() + (addr - SYS_SRAM_BASE), value);
+		for (int i = 0; i < 4; i++) speaker_pcm_byte(addr - SYS_SRAM_BASE + (uint32_t)i, (uint8_t)(value >> (8 * i)));
+		return;
+	}
 	if (in(addr, MODEM_RAM_BASE, MODEM_RAM_SIZE - 3)) { wr32le(modem_ram_.data() + (addr - MODEM_RAM_BASE), value); return; }
 	mmio_write(addr, value, 4);
 }
@@ -474,6 +536,13 @@ uint32_t Machine::gpio_ext(int bank) const
 		const bool out = (g.ddr & bit) != 0;
 		if (out ? (g.dr & bit) : (g.input & bit)) v |= bit;
 	}
+	if (bank == 0) {
+		const bool data_out = (g.ddr & (1u << 8)) != 0;
+		if (!data_out && fd_.cs && fd_.reading) {
+			if (fd_.read_bit) v |= 1u << 8;
+			else v &= ~(1u << 8);
+		}
+	}
 	if (bank == 1) {
 		// Keypad columns are GPIO B 17..20 (pin index 0x31..0x34).
 		for (int c = 0; c < 4; c++) {
@@ -524,6 +593,86 @@ void Machine::gpio_set_input(int pin, bool level)
 	}
 }
 
+uint16_t Machine::fd_read_reg(uint8_t reg) const
+{
+	switch (reg) {
+	case 0x0C: return 0x0200;		// synthesizer lock
+	case 0x67: return fd_.signal ? 0x01B8 : 0x00A0;
+	case 0x65: return fd_.signal ? 0x0008 : 0x0050;
+	case 0x30: return fd_.state;
+	case 0x38: return (uint16_t)(fd_.freq_10hz & 0xFFFFu);
+	case 0x39: return (uint16_t)(fd_.freq_10hz >> 16);
+	case 0x43: return fd_.bandwidth;
+	default: return fd_.regs[reg & 0x7Fu];
+	}
+}
+
+void Machine::fd_write_reg(uint8_t reg, uint16_t value)
+{
+	fd_.regs[reg & 0x7Fu] = value;
+	switch (reg) {
+	case 0x30: fd_.state = value; break;
+	case 0x43: fd_.bandwidth = value; break;
+	case 0x38: fd_.freq_10hz = (fd_.freq_10hz & 0xFFFF0000u) | value; break;
+	case 0x39: fd_.freq_10hz = (fd_.freq_10hz & 0xFFFFu) | ((uint32_t)value << 16); break;
+	default: break;
+	}
+}
+
+void Machine::fd_pins()
+{
+	const Gpio &g = gpio_[0];
+	const bool cs = !(((g.ddr >> 0x18) & 1u) && ((g.dr >> 0x18) & 1u));
+	const bool clk = ((g.ddr >> 7) & 1u) && ((g.dr >> 7) & 1u);
+	const bool data = ((g.ddr >> 8) & 1u) && ((g.dr >> 8) & 1u);
+	if (cs != fd_.cs) {
+		fd_.cs = cs;
+		if (cs) {
+			fd_.bits = 0;
+			fd_.addr = 0;
+			fd_.value = 0;
+			fd_.reading = false;
+			fd_.write_frame = false;
+		} else {
+			fd_.reading = false;
+		}
+	}
+	if (!fd_.cs) {
+		fd_.clk = clk;
+		return;
+	}
+	if (clk && !fd_.clk) {
+		if (fd_.write_frame) {
+			fd_.value = (uint16_t)((fd_.value << 1) | (data ? 1u : 0u));
+			if (++fd_.bits == 16) {
+				fd_write_reg(fd_.addr, fd_.value);
+				fd_.bits = 0;
+				fd_.write_frame = false;
+			}
+		} else if (fd_.reading) {
+			if (fd_.read_pos < 16) {
+				fd_.read_bit = ((fd_.read_value >> (15 - fd_.read_pos)) & 1u) != 0;
+				fd_.read_pos++;
+			}
+		} else {
+			fd_.addr = (uint8_t)((fd_.addr << 1) | (data ? 1u : 0u));
+			if (++fd_.bits == 8) {
+				fd_.bits = 0;
+				if (fd_.addr & 0x80u) {
+					fd_.reading = true;
+					fd_.read_value = fd_read_reg((uint8_t)(fd_.addr & 0x7Fu));
+					fd_.read_pos = 0;
+					fd_.read_bit = false;
+				} else {
+					fd_.write_frame = true;
+					fd_.value = 0;
+				}
+			}
+		}
+	}
+	fd_.clk = clk;
+}
+
 void Machine::gpio_apply_outputs(int bank, uint32_t old_dr)
 {
 	(void)old_dr;
@@ -532,6 +681,7 @@ void Machine::gpio_apply_outputs(int bank, uint32_t old_dr)
 	// PTA18 is the data-flash chip select, low active.
 	const bool cs = ((g.ddr >> 0x12) & 1u) && ((g.dr >> 0x12) & 1u);
 	nor_cs(!cs);
+	fd_pins();
 }
 
 uint32_t Machine::gpio_read(int bank, uint32_t off, uint32_t size)
@@ -603,6 +753,7 @@ uint32_t Machine::timer_value(int n) const
 void Machine::tick(uint64_t cycles)
 {
 	apb_cycles_ = cycles / 2; // CPU/AHB 168 MHz, APB 84 MHz
+	rf_sample_time_ = cycles / 700u; // 240 kHz RF sample timeline
 	for (int i = 0; i < 6; i++) {
 		Timer &t = timers_[i];
 		if (!(t.ctrl & 1u)) continue;
@@ -620,26 +771,46 @@ void Machine::tick(uint64_t cycles)
 	}
 	if (iq_enabled_ && iq_channel_) {
 		std::vector<IqSample> iq;
-		while (iq_channel_->receive(iq_id_, iq)) {
+		while (iq_channel_->receive_at(iq_id_, rf_sample_time_, iq)) {
+			fd_.signal = true;
+			fd_.signal_apb = apb_cycles_;
 			if (air_) air_->receive_iq(iq.data(), iq.size());
 			if (packet_) packet_->receive_iq(iq.data(), iq.size());
+			if (fm_ && fd_.bandwidth != 0x4048u) fm_->receive_iq(iq.data(), iq.size());
 		}
+		if (fd_.signal && apb_cycles_ - fd_.signal_apb > 8400000ull) fd_.signal = false;
 	}
 	modem_.tick(apb_cycles_);
 	if (modem_.pcm_mic_enabled()) {
 		if (pcm_next_apb_ == 0) pcm_next_apb_ = apb_cycles_ + 840000ull;
 		if (apb_cycles_ >= pcm_next_apb_) {
-			for (uint32_t i = 0; i < 80; i++) {
-				const int16_t sample = (int16_t)(8000.0 * std::sin(2.0 * M_PI * 1000.0 * pcm_phase_ / 8000.0));
-				write16(SYS_SRAM_BASE + 2u * i, (uint16_t)sample);
-				pcm_phase_ = (pcm_phase_ + 1u) % 8000u;
-			}
-			pic_raise(28);
+			fill_microphone();
 			pcm_next_apb_ += 840000ull;
 			if (pcm_next_apb_ <= apb_cycles_) pcm_next_apb_ = apb_cycles_ + 840000ull;
 		}
 	} else {
 		pcm_next_apb_ = 0;
+	}
+	if (fm_ && (fd_.state == 0xC1FEu || modem_.fm_tx_active()) &&
+	    (fd_.bandwidth == 0x3028u || fd_.bandwidth == 0x4008u)) {
+		if (fm_tx_next_apb_ == 0) fm_tx_next_apb_ = apb_cycles_;
+		int loops = 0;
+		while (apb_cycles_ >= fm_tx_next_apb_ && loops++ < 64) {
+			int16_t samples[80];
+			for (int i = 0; i < 80; i++) {
+				if (!mic_fifo_.empty()) {
+					samples[i] = mic_fifo_.front();
+					mic_fifo_.pop_front();
+				} else {
+					samples[i] = (int16_t)(8000.0 * std::sin(2.0 * M_PI * 1000.0 * pcm_phase_ / 8000.0));
+					pcm_phase_ = (pcm_phase_ + 1u) % 8000u;
+				}
+			}
+			fm_->modulate(samples, 80);
+			fm_tx_next_apb_ += 840000ull;
+		}
+	} else {
+		fm_tx_next_apb_ = 0;
 	}
 }
 

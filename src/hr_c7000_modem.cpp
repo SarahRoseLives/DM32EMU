@@ -66,6 +66,7 @@ void HrC7000Modem::reset()
 	deframe_pending_ = false;
 	rx_burst_ = {};
 	audio_control_ = 0;
+	fm_tx_ = false;
 	fm_addr_sw_ = 0;
 	fm_half_ = 0;
 	tx_half_ = 0;
@@ -137,6 +138,7 @@ void HrC7000Modem::write(uint32_t off, uint32_t value, uint32_t size, uint64_t a
 		break;
 	case 0x418: send_type_ = value; break;
 	case 0x41C: break;
+	case 0x560: fm_tx_ = value != 0; regs_[(off - 0x100u) / 4u] = value; break;
 	case 0x56C: fm_addr_sw_ = value; break;
 	default:
 		regs_[(off - 0x100u) / 4u] = value;

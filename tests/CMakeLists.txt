@@ -10,9 +10,17 @@ add_executable(test_fm_loopback test_fm_loopback.cpp)
 target_link_libraries(test_fm_loopback PRIVATE dm32core)
 add_test(NAME fm_loopback COMMAND test_fm_loopback)
 
+add_executable(test_audio test_audio.cpp)
+target_link_libraries(test_audio PRIVATE dm32core)
+add_test(NAME audio COMMAND test_audio)
+
 add_executable(test_modem test_modem.cpp)
 target_link_libraries(test_modem PRIVATE dm32core)
 add_test(NAME modem COMMAND test_modem)
+
+add_executable(test_fd6818 test_fd6818.cpp)
+target_link_libraries(test_fd6818 PRIVATE dm32core)
+add_test(NAME fd6818 COMMAND test_fd6818)
 
 add_executable(test_codec_backup test_codec_backup.cpp)
 target_link_libraries(test_codec_backup PRIVATE dm32core)

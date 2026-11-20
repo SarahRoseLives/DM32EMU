@@ -7,6 +7,8 @@
 #include <cmath>
 #include <vector>
 
+int timestamp_and_impairment_test();
+
 int main()
 {
 	VirtualRfIqChannel channel;
@@ -44,5 +46,31 @@ int main()
 	channel.transmit(1, tx.data(), tx.size());
 	CHECK(channel.receive(0, rx));
 	CHECK(!channel.receive(2, rx));
+	return timestamp_and_impairment_test();
+}
+
+int timestamp_and_impairment_test()
+{
+	VirtualRfIqChannel timed;
+	timed.add_receiver(1);
+	std::vector<IqSample> tx = {{1.0f, 0.0f}, {0.0f, 1.0f}, {-1.0f, 0.0f}};
+	timed.transmit(0, tx.data(), tx.size(), 100);
+	std::vector<IqSample> rx;
+	CHECK(!timed.receive_at(1, 102, rx));
+	CHECK(timed.receive_at(1, 103, rx));
+	CHECK_EQ(rx.size(), 3u);
+
+	VirtualRfIqChannel impaired;
+	impaired.add_receiver(1);
+	RfImpairments imp;
+	imp.enabled = true;
+	imp.frequency_offset_hz = 1000.0f;
+	imp.sample_clock_ppm = 10000.0f;
+	impaired.set_impairments(imp);
+	std::vector<IqSample> long_tx(100, {1.0f, 0.0f});
+	impaired.transmit(0, long_tx.data(), long_tx.size(), 0);
+	CHECK(impaired.receive_at(1, 1000, rx));
+	CHECK(rx.size() < long_tx.size());
+	CHECK(rx[0].i != long_tx[0].i || rx[0].q != long_tx[0].q);
 	return 0;
 }

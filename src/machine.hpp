@@ -5,6 +5,7 @@
 #include "elf.hpp"
 #include "c4fm_frontend.hpp"
 #include "dmr_burst.hpp"
+#include "rf_frontend.hpp"
 #include "hr_c7000_modem.hpp"
 #include "packet_frontend.hpp"
 #include "rf_channel.hpp"
@@ -62,9 +63,15 @@ public:
 
 	void attach_iq_channel(std::shared_ptr<VirtualRfIqChannel> channel, uint8_t id);
 	void set_dmr_timeslot(uint8_t ts) { modem_.set_timeslot(ts); }
+	uint16_t fd_state() const { return fd_.state; }
+	uint16_t fd_bandwidth() const { return fd_.bandwidth; }
+	uint32_t fd_frequency_hz() const { return fd_.freq_10hz * 10u; }
+	bool fm_tx_active() const { return modem_.fm_tx_active(); }
 	void inject_baseband_samples(const int16_t *samples, size_t count) { modem_.inject_discriminator_samples(samples, count); }
 	void set_iq_enabled(bool on) { iq_enabled_ = on; }
 	bool iq_enabled() const { return iq_enabled_; }
+	void set_audio_sink(std::function<void(const int16_t *, size_t)> sink) { audio_sink_ = std::move(sink); }
+	void inject_microphone_samples(const int16_t *samples, size_t count);
 	bool irq_pending() const { return irq_asserted_; }
 	int irq_source() const;
 	void clear_irq(int source);
@@ -92,9 +99,18 @@ private:
 	std::shared_ptr<VirtualRfIqChannel> iq_channel_;
 	std::unique_ptr<C4fmFrontend> air_;
 	std::unique_ptr<PacketFrontend> packet_;
+	std::unique_ptr<FmFrontend> fm_;
+	std::deque<int16_t> mic_fifo_;
+	std::array<uint8_t, 160> speaker_pcm_{};
+	size_t speaker_pcm_len_ = 0;
+	std::function<void(const int16_t *, size_t)> audio_sink_;
+	void speaker_pcm_byte(uint32_t offset, uint8_t value);
+	void fill_microphone();
 	uint8_t iq_id_ = 0;
 	bool iq_enabled_ = false;
+	uint64_t rf_sample_time_ = 0;
 	uint64_t pcm_next_apb_ = 0;
+	uint64_t fm_tx_next_apb_ = 0;
 	uint32_t pcm_phase_ = 0;
 	std::vector<uint8_t> dmr_rx_dibits_;
 	uint8_t dmr_seq_ = 0;
@@ -102,6 +118,29 @@ private:
 	void receive_dibits(const uint8_t *dibits, size_t count);
 	std::vector<uint8_t> data_flash_;
 	bool irq_asserted_ = false;
+
+	struct Fd6818 {
+		uint16_t regs[128]{};
+		uint16_t state = 0;
+		uint16_t bandwidth = 0;
+		uint32_t freq_10hz = 0;
+		bool cs = true;
+		bool clk = false;
+		bool reading = false;
+		bool write_frame = false;
+		uint8_t bits = 0;
+		uint8_t addr = 0;
+		uint16_t value = 0;
+		uint16_t read_value = 0;
+		uint8_t read_pos = 0;
+		bool read_bit = false;
+		bool signal = false;
+		uint64_t signal_apb = 0;
+	};
+	Fd6818 fd_;
+	void fd_pins();
+	uint16_t fd_read_reg(uint8_t reg) const;
+	void fd_write_reg(uint8_t reg, uint16_t value);
 
 	std::vector<uint8_t> uart_out_;
 	std::function<void(uint8_t)> uart_tx_sink_;
