@@ -2,14 +2,15 @@
 // Copyright (c) 2026 Sarah Rose
 #include "emulator_thread.hpp"
 
-#include "cpu.hpp"
 #include "firmware.hpp"
 #include "machine.hpp"
 
 #include <QElapsedTimer>
+#include <QString>
+
+#include <cstdio>
 
 #include <algorithm>
-#include <QString>
 
 EmulatorThread::EmulatorThread(QObject *parent) : QThread(parent) {}
 
@@ -36,15 +37,63 @@ bool EmulatorThread::loadFirmware(const QString &path, const QString &dataFlash,
 	}
 	auto cpu = std::make_unique<Cpu>(*machine);
 	cpu->reset(info.entry);
+	idle_lo_ = idle_hi_ = 0;
+	idle_skip_applied_ = idle_skip_enabled_.load();
+	find_function_range(path.toStdString(), "prvIdleTask", idle_lo_, idle_hi_);
+	if (idle_skip_applied_ && idle_hi_ > idle_lo_) cpu->set_idle_range(idle_lo_, idle_hi_);
 
 	machine_ = std::move(machine);
 	cpu_ = std::move(cpu);
 	pressed_at_.clear();
 	deferred_keys_.clear();
+	{
+		std::lock_guard<std::mutex> lock(queue_mutex_);
+		key_queue_.clear();
+	}
+	{
+		std::lock_guard<std::mutex> lock(cmd_mutex_);
+		commands_.clear();
+	}
+	{
+		std::lock_guard<std::mutex> lock(bp_mutex_);
+		breakpoints_.clear();
+	}
+	{
+		std::lock_guard<std::mutex> lock(inject_mutex_);
+		uart_inject_.clear();
+	}
+	local_breakpoints_.clear();
+	breakpoints_.clear();
+	temp_break_ = 0;
+	skip_break_pc_ = 0xFFFFFFFFu;
+	uart_tx_.clear();
+	uart_rx_.clear();
 	last_generation_ = 0;
 	stop_.store(false);
 	paused_.store(false);
+
+	machine_->set_uart_tx_sink([this](uint8_t b) {
+		uart_tx_.append(static_cast<char>(b));
+		bridge_.write_byte(b);
+	});
+	bridge_.set_rx_callback([this](uint8_t b) { uart_rx_.append(static_cast<char>(b)); });
+	bridge_.close();
+	std::string pty_path, pty_err;
+	if (bridge_.open_pty(pty_path, pty_err)) {
+		std::fprintf(stderr, "uart pty: %s\n", pty_path.c_str());
+		emit bridgeReady(QString::fromStdString(pty_path));
+	} else {
+		std::fprintf(stderr, "uart pty: %s\n", pty_err.c_str());
+		emit bridgeReady(QString());
+	}
 	return true;
+}
+
+void EmulatorThread::stop()
+{
+	stop_.store(true);
+	if (isRunning()) wait();
+	bridge_.close();
 }
 
 void EmulatorThread::setKey(const QString &name, bool pressed)
@@ -53,10 +102,156 @@ void EmulatorThread::setKey(const QString &name, bool pressed)
 	key_queue_.emplace_back(name.toStdString(), pressed);
 }
 
-void EmulatorThread::stop()
+void EmulatorThread::enqueue(Command cmd)
 {
-	stop_.store(true);
-	if (isRunning()) wait();
+	std::lock_guard<std::mutex> lock(cmd_mutex_);
+	commands_.push_back(cmd);
+}
+
+void EmulatorThread::step()
+{
+	paused_.store(true);
+	enqueue({CmdType::Step});
+}
+
+void EmulatorThread::stepOver()
+{
+	paused_.store(true);
+	enqueue({CmdType::StepOver});
+}
+
+void EmulatorThread::resumeExecution()
+{
+	enqueue({CmdType::Run});
+}
+
+void EmulatorThread::pause()
+{
+	paused_.store(true);
+	enqueue({CmdType::Pause});
+}
+
+void EmulatorThread::requestState() { enqueue({CmdType::State}); }
+
+void EmulatorThread::requestMemory(uint32_t addr, uint32_t len)
+{
+	enqueue({CmdType::ReadMemory, addr, len});
+}
+
+void EmulatorThread::addBreakpoint(uint32_t addr) { enqueue({CmdType::AddBreak, addr}); }
+
+void EmulatorThread::removeBreakpoint(uint32_t addr) { enqueue({CmdType::RemoveBreak, addr}); }
+
+void EmulatorThread::clearBreakpoints() { enqueue({CmdType::ClearBreak}); }
+
+void EmulatorThread::sendUart(const QByteArray &data)
+{
+	std::lock_guard<std::mutex> lock(inject_mutex_);
+	for (char c : data) uart_inject_.push_back(static_cast<uint8_t>(c));
+}
+
+bool EmulatorThread::executeOne()
+{
+	try {
+		cpu_->step();
+		return true;
+	} catch (const CpuFault &f) {
+		emit fault(QString::fromStdString(f.what()));
+		stop_.store(true);
+		return false;
+	}
+}
+
+void EmulatorThread::emitState()
+{
+	if (cpu_) emit stateReady(cpu_->snapshot());
+}
+
+void EmulatorThread::updateBreakpoints()
+{
+	std::lock_guard<std::mutex> lock(bp_mutex_);
+	local_breakpoints_ = breakpoints_;
+}
+
+bool EmulatorThread::isBreakpoint(uint32_t pc) const
+{
+	return std::find(local_breakpoints_.begin(), local_breakpoints_.end(), pc) !=
+	       local_breakpoints_.end();
+}
+
+void EmulatorThread::processCommands()
+{
+	std::deque<Command> pending;
+	{
+		std::lock_guard<std::mutex> lock(cmd_mutex_);
+		pending.swap(commands_);
+	}
+	if (pending.empty()) return;
+
+	for (const auto &cmd : pending) {
+		switch (cmd.type) {
+		case CmdType::Step:
+			paused_.store(true);
+			if (!executeOne()) return;
+			machine_->tick(cpu_->cycles());
+			emitState();
+			break;
+		case CmdType::StepOver:
+			if (cpu_->is_call_instruction()) {
+				temp_break_ = cpu_->pc() + (uint32_t)cpu_->instruction_size();
+				skip_break_pc_ = cpu_->pc();
+				paused_.store(false);
+			} else {
+				paused_.store(true);
+				if (!executeOne()) return;
+				machine_->tick(cpu_->cycles());
+				emitState();
+			}
+			break;
+		case CmdType::Run:
+			temp_break_ = 0;
+			skip_break_pc_ = cpu_->pc();
+			paused_.store(false);
+			break;
+		case CmdType::Pause:
+			paused_.store(true);
+			temp_break_ = 0;
+			emitState();
+			break;
+		case CmdType::State:
+			emitState();
+			break;
+		case CmdType::ReadMemory: {
+			const uint32_t len = std::min<uint32_t>(cmd.b, 4096);
+			QByteArray data;
+			data.reserve((int)len);
+			for (uint32_t i = 0; i < len; i++) {
+				data.append(static_cast<char>(machine_->peek8(cmd.a + i)));
+			}
+			emit memoryReady(cmd.a, data);
+			break;
+		}
+		case CmdType::AddBreak: {
+			std::lock_guard<std::mutex> lock(bp_mutex_);
+			if (std::find(breakpoints_.begin(), breakpoints_.end(), cmd.a) == breakpoints_.end()) {
+				breakpoints_.push_back(cmd.a);
+			}
+			break;
+		}
+		case CmdType::RemoveBreak: {
+			std::lock_guard<std::mutex> lock(bp_mutex_);
+			breakpoints_.erase(std::remove(breakpoints_.begin(), breakpoints_.end(), cmd.a),
+					   breakpoints_.end());
+			break;
+		}
+		case CmdType::ClearBreak: {
+			std::lock_guard<std::mutex> lock(bp_mutex_);
+			breakpoints_.clear();
+			break;
+		}
+		}
+	}
+	updateBreakpoints();
 }
 
 void EmulatorThread::applyKeys()
@@ -105,6 +300,29 @@ void EmulatorThread::applyKeys()
 	deferred_keys_.swap(keep);
 }
 
+void EmulatorThread::applyUartInject()
+{
+	std::deque<uint8_t> pending;
+	{
+		std::lock_guard<std::mutex> lock(inject_mutex_);
+		pending.swap(uart_inject_);
+	}
+	if (!machine_) return;
+	for (uint8_t b : pending) machine_->feed_uart(0, b);
+}
+
+void EmulatorThread::flushUart()
+{
+	if (!uart_tx_.isEmpty()) {
+		emit uartTx(uart_tx_);
+		uart_tx_.clear();
+	}
+	if (!uart_rx_.isEmpty()) {
+		emit uartRx(uart_rx_);
+		uart_rx_.clear();
+	}
+}
+
 QImage EmulatorThread::makeFrameImage() const
 {
 	QImage image(Machine::DISPLAY_WIDTH, Machine::DISPLAY_HEIGHT, QImage::Format_RGB32);
@@ -132,38 +350,82 @@ void EmulatorThread::run()
 	if (!machine_ || !cpu_) return;
 
 	emit statusMessage(QStringLiteral("Running"));
+	emitState();
 	QElapsedTimer frameTimer;
+	QElapsedTimer stateTimer;
 	frameTimer.start();
-
-	while (!stop_.load()) {
-		applyKeys();
-		if (paused_.load()) {
-			msleep(10);
-			continue;
-		}
-
-		const int batch = 500000;
-		bool stop_after = false;
-		for (int i = 0; i < batch && !stop_.load(); i++) {
-			if ((i & 0x3fff) == 0 && paused_.load()) break;
-			try {
-				cpu_->step();
-				machine_->tick(cpu_->cycles());
-			} catch (const CpuFault &f) {
-				emit fault(QString::fromStdString(f.what()));
-				stop_.store(true);
-				stop_after = true;
-				break;
-			}
-		}
-		if (stop_after) break;
-
+	stateTimer.start();
+	auto emitFrameIfChanged = [&](bool force) {
 		const uint64_t gen = machine_->framebuffer_generation();
-		if (gen != last_generation_ && frameTimer.elapsed() >= 30) {
+		if (gen != last_generation_ && (force || frameTimer.elapsed() >= 30)) {
 			last_generation_ = gen;
 			frameTimer.restart();
 			emit frameReady(makeFrameImage(), machine_->frame_count());
 		}
+	};
+
+	while (!stop_.load()) {
+		const bool want_idle = idle_skip_enabled_.load();
+		if (want_idle != idle_skip_applied_) {
+			idle_skip_applied_ = want_idle;
+			cpu_->set_idle_range(want_idle ? idle_lo_ : 0, want_idle ? idle_hi_ : 0);
+		}
+		processCommands();
+		applyKeys();
+		applyUartInject();
+		if (bridge_.active()) bridge_.poll(*machine_);
+		flushUart();
+		emitFrameIfChanged(paused_.load());
+
+		if (paused_.load()) {
+			msleep(5);
+			continue;
+		}
+
+		updateBreakpoints();
+		const int batch = 500000;
+		uint64_t last_io = cpu_->cycles();
+		bool stop_after = false;
+		for (int i = 0; i < batch && !stop_.load(); i++) {
+			if ((i & 0x3fff) == 0 && paused_.load()) break;
+			if (temp_break_ != 0 && cpu_->pc() == temp_break_) {
+				temp_break_ = 0;
+				paused_.store(true);
+				emitState();
+				break;
+			}
+			const uint32_t pc = cpu_->pc();
+			if (isBreakpoint(pc) && pc != skip_break_pc_) {
+				temp_break_ = 0;
+				skip_break_pc_ = 0xFFFFFFFFu;
+				paused_.store(true);
+				emit breakpointHit(pc);
+				emitState();
+				break;
+			}
+			if (pc == skip_break_pc_) skip_break_pc_ = 0xFFFFFFFFu;
+			if (!executeOne()) {
+				stop_after = true;
+				break;
+			}
+			if ((i & 0x3FF) == 0) machine_->tick(cpu_->cycles());
+			if (cpu_->cycles() - last_io >= 16384) {
+				last_io = cpu_->cycles();
+				applyKeys();
+				applyUartInject();
+				if (bridge_.active()) bridge_.poll(*machine_);
+				flushUart();
+			}
+		}
+		flushUart();
+		if (stop_after) break;
+		emitFrameIfChanged(paused_.load());
+
+		if (!paused_.load() && stateTimer.elapsed() >= 250) {
+			stateTimer.restart();
+			emitState();
+		}
 	}
+	flushUart();
 	emit statusMessage(stop_.load() ? QStringLiteral("Stopped") : QStringLiteral("Finished"));
 }

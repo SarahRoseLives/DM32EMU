@@ -55,6 +55,7 @@ Cpu::Cpu(Machine &machine) : bus_(machine) { reset(Machine::APP_BASE); }
 void Cpu::reset(uint32_t entry)
 {
 	std::memset(r_, 0, sizeof(r_));
+	cache_.assign(Machine::RAM_SIZE / 2 + Machine::FLASH_SIZE / 2, CachedInsn{});
 	pc_ = entry & ~1u;
 	psr_ = 0x80000100u; // supervisor, exceptions enabled, interrupts off
 	epsr_ = 0;
@@ -62,6 +63,7 @@ void Cpu::reset(uint32_t entry)
 	vbr_ = 0;
 	carry_ = false;
 	cycles_ = 0;
+	irq_check_ = 0;
 	bus_.set_vbr(vbr_);
 }
 
@@ -82,9 +84,56 @@ void Cpu::take_irq(int source)
 	pc_ = bus_.read_vector(vector) & ~1u;
 }
 
+bool Cpu::fetch(uint32_t pc, uint32_t &insn, uint8_t &len)
+{
+	uint32_t index;
+	if (pc < Machine::RAM_SIZE) {
+		index = pc / 2;
+	} else if (pc >= Machine::FLASH_BASE && pc < Machine::FLASH_BASE + Machine::FLASH_SIZE) {
+		index = Machine::RAM_SIZE / 2 + (pc - Machine::FLASH_BASE) / 2;
+	} else {
+		return false;
+	}
+	if (index >= cache_.size()) return false;
+	CachedInsn &e = cache_[index];
+	if (e.len != 0) {
+		insn = e.insn;
+		len = e.len;
+		return true;
+	}
+	const uint16_t half = bus_.read16(pc);
+	if ((half & 0xC000u) != 0xC000u) {
+		e.insn = half;
+		e.len = 2;
+	} else {
+		e.insn = ((uint32_t)half << 16) | bus_.read16(pc + 2);
+		e.len = 4;
+	}
+	insn = e.insn;
+	len = e.len;
+	return true;
+}
+
+bool Cpu::idle_branch_target(uint32_t &target)
+{
+	uint32_t insn;
+	uint8_t len;
+	if (!fetch(pc_, insn, len)) return false;
+	if (len == 2) {
+		if (((insn >> 10) & 0x3Fu) != 1u) return false;
+		target = pc_ + (uint32_t)sext((insn & 0x3FFu) << 1, 11);
+	} else {
+		if (((insn >> 26) & 0xFu) != 0xAu || ((insn >> 21) & 0x1Fu) != 0u) return false;
+		target = pc_ + (uint32_t)sext((insn & 0xFFFFu) << 1, 17);
+	}
+	if (target >= pc_) return false;
+	idle_branch_pc_ = pc_;
+	return true;
+}
+
 void Cpu::step()
 {
-	if (irq_pending()) {
+	if ((++irq_check_ & 7u) == 0 && irq_pending()) {
 		const int source = bus_.irq_source();
 		if (source >= 0) {
 			take_irq(source);
@@ -92,21 +141,43 @@ void Cpu::step()
 		}
 	}
 
-	const uint32_t pc = pc_;
-	const uint16_t half = bus_.read16(pc);
-	uint32_t insn;
-	uint32_t next;
-
-	if ((half & 0xC000u) != 0xC000u) {
-		insn = half;
-		next = pc + 2;
-		exec16(insn, pc, next);
-	} else {
-		insn = ((uint32_t)half << 16) | bus_.read16(pc + 2);
-		next = pc + 4;
-		exec32(insn, pc, next);
+	if (idle_skip_ && !idle_cooldown_ && pc_ >= idle_lo_ && pc_ < idle_hi_ &&
+	    (psr_ & (PSR_EE | PSR_IE)) == (PSR_EE | PSR_IE)) {
+		uint32_t target;
+		if (idle_branch_target(target)) {
+			bus_.tick(cycles_);
+			uint64_t next = bus_.cpu_cycles_to_next_timer(cycles_);
+			const uint64_t max_skip = 336000u; // about 2 ms of CPU cycles
+			if (next > cycles_ + max_skip) next = cycles_ + max_skip;
+			if (next > cycles_ && !bus_.irq_pending()) {
+				cycles_ = next;
+				bus_.tick(cycles_);
+				idle_cooldown_ = true;
+				irq_check_ = 7;
+				return;
+			}
+		}
 	}
+
+	const uint32_t pc = pc_;
+	uint32_t insn = 0;
+	uint8_t len = 0;
+	uint32_t next;
+	if (!fetch(pc, insn, len)) {
+		const uint16_t half = bus_.read16(pc);
+		if ((half & 0xC000u) != 0xC000u) {
+			insn = half;
+			len = 2;
+		} else {
+			insn = ((uint32_t)half << 16) | bus_.read16(pc + 2);
+			len = 4;
+		}
+	}
+	next = pc + len;
+	if (len == 2) exec16(insn, pc, next);
+	else exec32(insn, pc, next);
 	pc_ = next & ~1u;
+	if (pc == idle_branch_pc_) idle_cooldown_ = false;
 	cycles_++;
 }
 
@@ -115,6 +186,46 @@ void Cpu::unknown(uint32_t pc, uint32_t insn)
 	char buf[128];
 	std::snprintf(buf, sizeof(buf), "illegal instruction 0x%08" PRIx32 " at 0x%08" PRIx32, insn, pc);
 	throw CpuFault(pc, insn, buf);
+}
+
+CpuSnapshot Cpu::snapshot() const
+{
+	CpuSnapshot s;
+	std::memcpy(s.r, r_, sizeof(r_));
+	s.pc = pc_;
+	s.psr = psr_value();
+	s.epsr = epsr_;
+	s.epc = epc_;
+	s.vbr = vbr_;
+	s.cycles = cycles_;
+	return s;
+}
+
+int Cpu::instruction_size()
+{
+	uint32_t insn;
+	uint8_t len;
+	if (fetch(pc_, insn, len)) return len;
+	const uint16_t half = bus_.read16(pc_);
+	return (half & 0xC000u) == 0xC000u ? 4 : 2;
+}
+
+bool Cpu::is_call_instruction()
+{
+	uint32_t fetched;
+	uint8_t len;
+	if (!fetch(pc_, fetched, len)) return false;
+	if (len == 2) {
+		const uint32_t op = (fetched >> 10) & 0x3Fu;
+		return op == 0x1E && (fetched & 0x3u) == 0x1u; // jsr rX
+	}
+	const uint32_t op = (fetched >> 26) & 0xFu;
+	if (op == 0x8) return true; // bsr / jbsr
+	if (op == 0xA) {
+		const uint32_t sop = (fetched >> 21) & 0x1Fu;
+		return sop == 0x7 || sop == 0x17; // jsr / jsri
+	}
+	return false;
 }
 
 void Cpu::dump(std::FILE *out) const

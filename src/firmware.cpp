@@ -4,6 +4,8 @@
 #include "elf.hpp"
 #include "machine.hpp"
 
+#include <filesystem>
+
 bool load_firmware(Machine &machine, const std::string &path, FirmwareInfo &info, std::string &err)
 {
 	const bool is_elf = path.size() >= 4 && path.substr(path.size() - 4) == ".elf";
@@ -20,4 +22,25 @@ bool load_firmware(Machine &machine, const std::string &path, FirmwareInfo &info
 		info.entry = Machine::APP_BASE;
 	}
 	return true;
+}
+
+bool find_function_range(const std::string &firmware, const std::string &name, uint32_t &lo, uint32_t &hi)
+{
+	std::string path = firmware;
+	if (path.size() < 4 || path.substr(path.size() - 4) != ".elf") {
+		if (path.size() >= 4 && path.substr(path.size() - 4) == ".bin") path.resize(path.size() - 4);
+		path += ".elf";
+		if (!std::filesystem::exists(path)) return false;
+	}
+	std::vector<ElfSymbol> syms;
+	std::string err;
+	if (!load_symbols(path, syms, err)) return false;
+	for (const auto &s : syms) {
+		if (s.name == name && s.size != 0) {
+			lo = s.addr;
+			hi = s.addr + s.size;
+			return true;
+		}
+	}
+	return false;
 }

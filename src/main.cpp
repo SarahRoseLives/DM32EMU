@@ -4,6 +4,7 @@
 #include "elf.hpp"
 #include "firmware.hpp"
 #include "machine.hpp"
+#include "uart_bridge.hpp"
 
 #include <algorithm>
 #include <cinttypes>
@@ -36,10 +37,13 @@ void usage(const char *argv0)
 		"  --dump ADDR:LEN      print memory on stop (repeatable)\n"
 		"  --key NAME[@STEP[:N]] press a key at instruction STEP for N steps\n"
 		"  --key-hold N         default key hold in instructions (20000000)\n"
+		"  --uart-pty           bridge UART0 to a new PTY (prints the path)\n"
+		"  --uart-tcp PORT      bridge UART0 to 127.0.0.1:PORT\n"
 		"  --no-uart-echo       collect UART output without printing it live\n"
 		"  --fb FILE            write the LCD as a PPM on exit\n"
 		"  --fb-every N         write a PPM every N completed frames\n"
 		"  --verbose            log unknown MMIO reads and writes\n"
+		"  --no-idle-skip       do not fast-forward the FreeRTOS idle loop\n"
 		"  --self-test          run built-in checks and exit\n"
 		"\n"
 		"Keys: ok/green/menu 0-9 * # up down left right back/red sk1 sk2 ptt\n",
@@ -150,6 +154,9 @@ int main(int argc, char **argv)
 	bool trace = false;
 	bool uart_echo = true;
 	bool verbose = false;
+	bool idle_skip = true;
+	bool uart_pty = false;
+	int uart_tcp_port = -1;
 	std::vector<uint32_t> breakpoints;
 	std::vector<DumpRange> dumps;
 	std::vector<KeyEvent> keys;
@@ -181,6 +188,12 @@ int main(int argc, char **argv)
 			uart_echo = false;
 		} else if (a == "--verbose") {
 			verbose = true;
+		} else if (a == "--no-idle-skip") {
+			idle_skip = false;
+		} else if (a == "--uart-pty") {
+			uart_pty = true;
+		} else if (a == "--uart-tcp" && i + 1 < argc) {
+			uart_tcp_port = (int)parse_u64(argv[++i]);
 		} else if (a == "--break" && i + 1 < argc) {
 			breakpoints.push_back((uint32_t)parse_u64(argv[++i]));
 		} else if (a == "--dump" && i + 1 < argc) {
@@ -258,6 +271,33 @@ int main(int argc, char **argv)
 	Cpu cpu(machine);
 	cpu.reset(entry);
 
+	if (idle_skip) {
+		uint32_t lo = 0, hi = 0;
+		if (find_function_range(firmware, "prvIdleTask", lo, hi)) {
+			cpu.set_idle_range(lo, hi);
+			std::fprintf(stderr, "idle skip: 0x%08x-0x%08x\n", lo, hi);
+		}
+	}
+
+	UartBridge bridge;
+	if (uart_pty) {
+		std::string path, e;
+		if (!bridge.open_pty(path, e)) {
+			std::fprintf(stderr, "uart pty: %s\n", e.c_str());
+		} else {
+			machine.set_uart_tx_sink([&bridge](uint8_t b) { bridge.write_byte(b); });
+			std::fprintf(stderr, "uart pty: %s\n", path.c_str());
+		}
+	} else if (uart_tcp_port >= 0) {
+		std::string info, e;
+		if (!bridge.open_tcp((uint16_t)uart_tcp_port, info, e)) {
+			std::fprintf(stderr, "uart tcp: %s\n", e.c_str());
+		} else {
+			machine.set_uart_tx_sink([&bridge](uint8_t b) { bridge.write_byte(b); });
+			std::fprintf(stderr, "uart tcp: %s\n", info.c_str());
+		}
+	}
+
 	std::signal(SIGINT, on_signal);
 	std::signal(SIGTERM, on_signal);
 
@@ -267,10 +307,15 @@ int main(int argc, char **argv)
 			 max_steps);
 
 	uint64_t last_frame = 0;
+	uint64_t last_io = 0;
 	uint64_t steps = 0;
 	bool break_hit = false;
 	int rc = 0;
 	for (; steps < max_steps && !g_stop; steps++) {
+		if (bridge.active() && cpu.cycles() - last_io >= 16384) {
+			last_io = cpu.cycles();
+			bridge.poll(machine);
+		}
 		for (auto &k : keys) {
 			if (!k.down && steps >= k.start && (k.duration == 0 || steps < k.start + k.duration)) {
 				std::string e;
@@ -302,7 +347,7 @@ int main(int argc, char **argv)
 						 label.empty() ? "" : (" " + label).c_str(), cpu.psr());
 			}
 			cpu.step();
-			machine.tick(cpu.cycles());
+			if ((steps & 0x3FFu) == 0) machine.tick(cpu.cycles());
 		} catch (const CpuFault &f) {
 			std::fprintf(stderr, "\nCPU fault: %s\n", f.what());
 			const std::string label = symtab.label(f.pc);

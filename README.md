@@ -7,6 +7,8 @@ A small C++ emulator for the Baofeng DM-32UV radio's HR_C7000 SoC
 without a radio, and is aimed at debugging the firmware rather than at
 replacing a hardware-in-the-loop test.
 
+If this is useful, you can support the work: **[Donate](https://sarahsforge.dev/products/donation)**.
+
 It boots the P32 image to its home screen and menu, renders the LCD to a
 PPM/PNG, prints the firmware's UART output, and supports scripted key presses,
 breakpoints, memory dumps, symbols and instruction tracing.
@@ -28,6 +30,9 @@ This builds the command-line emulator `build/dm32emu`. If Qt6 Widgets is
 available, it also builds the GUI `build/dm32gui`. No C-SKY toolchain is
 needed at run time. An ELF is only used for symbols; the emulator executes the
 application image itself.
+
+The build uses `-O3`, link-time optimization and, by default, `-march=native`.
+Pass `-DDM32EMU_NATIVE=OFF` to CMake for a portable build.
 
 ## Status
 
@@ -64,8 +69,9 @@ A raw `.bin` is loaded at `0x0300c000`, the application base used by the
 Baofeng bootloader. An `.elf` file can be passed instead; its PT_LOAD
 segments are loaded by physical address and its entry point is used.
 
-The splash is frame 1 and 2; the home screen is frame 3. A 300-million
-instruction run takes about 10 seconds on a current desktop.
+The splash is frame 1 and 2; the home screen is frame 3. With the default
+idle fast-forward, frame 3 arrives in about 1.5 seconds on a current desktop.
+Use `--no-idle-skip` for timing-faithful runs; see [Performance](#performance).
 
 ### GUI
 
@@ -91,7 +97,25 @@ The keypad is clickable, and these keyboard keys map to the radio:
 | `F1` / `F2` | SK1 / SK2 |
 
 The emulator runs as fast as the host allows; use Pause to stop and inspect a
-screen. The GUI updates the screen at about 30 Hz while frames change.
+screen. The GUI updates the screen at about 30 Hz while frames change and the
+register view about four times a second. **Emulator > Skip idle** is on by
+default and fast-forwards the FreeRTOS idle loop; turn it off when debugging
+idle, watchdog or timing-sensitive code.
+
+The Debugger dock has:
+
+| Tab | What it does |
+|---|---|
+| Registers | PC, PSR, EPC/VBR, cycle count and r0-r31, with the PC's symbol |
+| Memory | hex/ASCII view of RAM and program flash; "Follow PC" tracks execution |
+| Breakpoints | add/remove addresses, or double-click a symbol to break there |
+| Symbols | functions from the ELF beside the `.bin`, or from an `.elf` passed as firmware |
+| UART | the debug-link PTY path, decoded UART traffic and a text send box |
+
+When a firmware loads, the GUI creates a PTY for UART0 and shows it in the UART
+tab. Point the firmware's debug-link or CPS tool at that path, for example
+`tools/rfoundry_debug.py` from P32 or the HIL test harness. The radio-side
+protocol and the tools are unchanged; the PTY is the programming cable.
 
 The GUI can also run headless for screenshots and tests:
 
@@ -120,6 +144,9 @@ number of full LCD frames.
 | `--fb FILE` | write the LCD as a binary PPM on exit |
 | `--fb-every N` | write `FILE.<frame>.ppm` every `N` frames |
 | `--data-flash FILE` | load a real 16 MB SPI NOR dump (calibration, codeplug) |
+| `--uart-pty` | bridge UART0 to a new PTY and print its path |
+| `--uart-tcp PORT` | bridge UART0 to `127.0.0.1:PORT` (`0` picks a free port) |
+| `--no-idle-skip` | do not fast-forward the FreeRTOS idle loop |
 | `--steps N` | instruction budget (default 500,000,000) |
 | `--no-uart-echo` | collect UART output without printing it live |
 | `--verbose` | log SPI NOR and LCD traffic and unknown MMIO |
@@ -141,7 +168,14 @@ Examples:
 # Stop at the start-up task and inspect the vector table
 ./build/dm32emu rfoundry_dm32.bin --symbols rfoundry_dm32.elf \
     --break 0x0300c10c --dump 0x10000:0x80
+
+# Expose the UART0 debug link through a PTY
+./build/dm32emu rfoundry_dm32.bin --uart-pty
+# uart pty: /dev/pts/9
 ```
+
+For a TCP bridge, use `--uart-tcp 0`; the emulator prints
+`uart tcp: 127.0.0.1:<port>`.
 
 Convert the PPM with ImageMagick (`convert home.ppm home.png`), ffmpeg, or
 Python/Pillow.
@@ -154,6 +188,7 @@ src/cpu.cpp/.hpp   C-SKY ABIv2 CK803S interpreter
 src/machine.cpp    memory map, PIC, timers, GPIO/keypad, UART, SPI NOR, LCD
 src/elf.cpp        ELF32 loader and symbol reader
 src/firmware.cpp   shared .bin/.elf firmware loader
+src/uart_bridge.cpp  UART0 to PTY/TCP bridge for the debug link and CPS tools
 src/gui/           Qt6 GUI: worker thread, radio/keypad widget, main window
 ```
 
@@ -194,6 +229,29 @@ operations. The DSP/FPU extensions are not implemented.
 The firmware's own specifications live in `../P32/docs/spec/`; in particular
 `hardware-dm32.md` has the memory map, pins, LCD command sequence, SPI NOR
 commands and timer/PIC details used here.
+
+## Performance
+
+The emulator is designed to run at interactive speed, not just to be correct:
+
+- The instruction stream is cached after the first fetch.
+- Timers are serviced in batches instead of on every instruction.
+- Timer interrupts are checked every eight instructions.
+- The FreeRTOS idle loop is fast-forwarded to the next timer deadline, while
+  still running the idle hook once per tick to feed the watchdog and update
+  idle statistics. This removes most of the boot time spent in
+  `hal_millis()`/`__udivdi3` and watchdog housekeeping.
+- The default build uses `-O3`, LTO and `-march=native`.
+
+On the test machine the P32 image reaches its home screen in about 1.5 seconds
+with idle skip, against roughly 11 seconds with `--no-idle-skip`. Emulated time
+is still advanced by the skipped cycles, so timer-based delays keep their
+length in guest time; the idle loop is simply not interpreted instruction by
+instruction.
+
+Turn idle skip off in the GUI (**Emulator > Skip idle**) or with
+`--no-idle-skip` when debugging the watchdog, idle task, or code whose behavior
+depends on the idle hook running every loop.
 
 ## Related work
 

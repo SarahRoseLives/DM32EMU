@@ -7,6 +7,8 @@
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <functional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -37,15 +39,19 @@ public:
 	void write16(uint32_t addr, uint16_t value);
 	void write32(uint32_t addr, uint32_t value);
 
-	void tick(uint64_t cycles);
-	bool irq_pending() const;
-	int irq_source() const;
-	void clear_irq(int source);
-
 	void set_uart_echo(bool on) { uart_echo_ = on; }
 	void set_verbose(bool on) { verbose_ = on; }
 	void set_trace_uart(bool on) { trace_uart_ = on; }
 	bool set_key(const std::string &name, bool pressed, std::string &err);
+	void set_uart_tx_sink(std::function<void(uint8_t)> sink) { uart_tx_sink_ = std::move(sink); }
+	void feed_uart(int idx, uint8_t b) { uart_push_rx(idx, b); }
+	uint8_t peek8(uint32_t addr) const;
+
+	void tick(uint64_t cycles);
+	uint64_t cpu_cycles_to_next_timer(uint64_t cycles) const;
+	bool irq_pending() const { return irq_asserted_; }
+	int irq_source() const;
+	void clear_irq(int source);
 
 	static constexpr uint32_t DISPLAY_WIDTH = 240;
 	static constexpr uint32_t DISPLAY_HEIGHT = 320;
@@ -67,8 +73,10 @@ private:
 	std::vector<uint8_t> sys_sram_;
 	std::vector<uint8_t> modem_ram_;
 	std::vector<uint8_t> data_flash_;
+	bool irq_asserted_ = false;
 
 	std::vector<uint8_t> uart_out_;
+	std::function<void(uint8_t)> uart_tx_sink_;
 	bool uart_echo_ = true;
 	bool verbose_ = false;
 	bool trace_uart_ = false;
@@ -236,4 +244,5 @@ private:
 	void log_unknown(uint32_t addr, bool write);
 	void pic_raise(int source);
 	void pic_lower(int source);
+	void update_irq();
 };

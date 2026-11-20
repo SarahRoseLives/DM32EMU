@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "machine.hpp"
 
@@ -16,6 +17,16 @@ struct CpuFault : std::runtime_error {
 		: std::runtime_error(what), pc(pc_), insn(insn_)
 	{
 	}
+};
+
+struct CpuSnapshot {
+	uint32_t r[32]{};
+	uint32_t pc = 0;
+	uint32_t psr = 0;
+	uint32_t epsr = 0;
+	uint32_t epc = 0;
+	uint32_t vbr = 0;
+	uint64_t cycles = 0;
 };
 
 // C-SKY ABIv2 interpreter as used by the CK803S in the HR_C7000.
@@ -39,7 +50,27 @@ public:
 	bool irq_pending() const;
 	void take_irq(int source);
 
+	CpuSnapshot snapshot() const;
+	int instruction_size();
+	bool is_call_instruction();
+	void set_idle_range(uint32_t lo, uint32_t hi)
+	{
+		idle_lo_ = lo;
+		idle_hi_ = hi;
+		idle_skip_ = hi > lo;
+	}
+	void disable_idle_skip() { idle_skip_ = false; }
+
 	void dump(std::FILE *out) const;
+
+private:
+	struct CachedInsn {
+		uint32_t insn = 0;
+		uint8_t len = 0;
+	};
+	std::vector<CachedInsn> cache_;
+	bool fetch(uint32_t pc, uint32_t &insn, uint8_t &len);
+	bool idle_branch_target(uint32_t &target);
 
 private:
 	Machine &bus_;
@@ -52,6 +83,11 @@ private:
 	uint32_t ss_[5]{};
 	bool carry_ = false;
 	uint64_t cycles_ = 0;
+	uint8_t irq_check_ = 0;
+	uint32_t idle_lo_ = 0, idle_hi_ = 0;
+	bool idle_skip_ = false;
+	bool idle_cooldown_ = false;
+	uint32_t idle_branch_pc_ = 0;
 
 	uint8_t rd8(uint32_t a) { return bus_.read8(a); }
 	uint16_t rd16(uint32_t a) { return bus_.read16(a); }

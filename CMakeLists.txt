@@ -9,13 +9,24 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
 
-add_compile_options(-Wall -Wextra -Wpedantic)
+add_compile_options(-Wall -Wextra -Wpedantic -O3)
+
+option(DM32EMU_NATIVE "Build for this host CPU (-march=native)" ON)
+if(DM32EMU_NATIVE)
+  add_compile_options(-march=native)
+endif()
+
+if(NOT MSVC)
+  add_compile_options(-flto)
+  add_link_options(-flto)
+endif()
 
 add_library(dm32core STATIC
   src/elf.cpp
   src/firmware.cpp
   src/cpu.cpp
   src/machine.cpp
+  src/uart_bridge.cpp
 )
 target_include_directories(dm32core PUBLIC src)
 

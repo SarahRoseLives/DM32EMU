@@ -13,3 +13,4 @@ struct FirmwareInfo {
 };
 
 bool load_firmware(Machine &machine, const std::string &path, FirmwareInfo &info, std::string &err);
+bool find_function_range(const std::string &firmware, const std::string &name, uint32_t &lo, uint32_t &hi);

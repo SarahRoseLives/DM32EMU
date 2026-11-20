@@ -109,6 +109,7 @@ void Machine::reset()
 	pic_ = {};
 	pic_.mask = pic_.mask1 = 0xFFFFFFFFu;
 	pic_.po = pic_.po1 = 0xFFFFFFFFu;
+	irq_asserted_ = false;
 	apb_cycles_ = 0;
 	timers_ = {};
 	for (auto &t : timers_) t.ctrl = 0x4;
@@ -454,6 +455,29 @@ void Machine::tick(uint64_t cycles)
 	}
 }
 
+void Machine::update_irq()
+{
+	irq_asserted_ = ((pic_.level_lo & ~pic_.mask) | (pic_.level_hi & ~pic_.mask1)) != 0;
+}
+
+uint64_t Machine::cpu_cycles_to_next_timer(uint64_t cycles) const
+{
+	if (irq_asserted_) return 0;
+	const uint64_t apb = cycles / 2;
+	uint64_t best = 0;
+	for (int i = 0; i < 6; i++) {
+		const Timer &t = timers_[i];
+		if (!(t.ctrl & 1u) || (t.ctrl & 4u) || t.irq) continue;
+		const uint64_t period = (uint64_t)t.load + 1u;
+		if (!(t.ctrl & 2u) && t.periods_done >= 1) continue;
+		const uint64_t next = t.start_apb + (t.periods_done + 1u) * period;
+		if (next <= apb) return 0;
+		if (best == 0 || next < best) best = next;
+	}
+	if (best == 0) return 0;
+	return best * 2u;
+}
+
 void Machine::pic_raise(int source)
 {
 	if (source < 0 || source >= 64) return;
@@ -461,6 +485,7 @@ void Machine::pic_raise(int source)
 	else pic_.level_hi |= 1u << (source - 32);
 	if (source < 32) pic_.latched_lo |= 1u << source;
 	else pic_.latched_hi |= 1u << (source - 32);
+	update_irq();
 }
 
 void Machine::pic_lower(int source)
@@ -468,13 +493,7 @@ void Machine::pic_lower(int source)
 	if (source < 0 || source >= 64) return;
 	if (source < 32) pic_.level_lo &= ~(1u << source);
 	else pic_.level_hi &= ~(1u << (source - 32));
-}
-
-bool Machine::irq_pending() const
-{
-	const uint32_t lo = pic_.level_lo & ~pic_.mask;
-	const uint32_t hi = pic_.level_hi & ~pic_.mask1;
-	return (lo | hi) != 0;
+	update_irq();
 }
 
 int Machine::irq_source() const
@@ -540,6 +559,7 @@ void Machine::uart_write(int idx, uint32_t off, uint32_t value, uint32_t size)
 		} else if (u.host) {
 			const uint8_t b = (uint8_t)value;
 			uart_out_.push_back(b);
+			if (uart_tx_sink_) uart_tx_sink_(b);
 			if (uart_echo_) {
 				std::fputc(b, stderr);
 				std::fflush(stderr);
@@ -563,6 +583,15 @@ void Machine::uart_write(int idx, uint32_t off, uint32_t value, uint32_t size)
 	default:
 		break;
 	}
+}
+
+uint8_t Machine::peek8(uint32_t addr) const
+{
+	if (addr < RAM_SIZE) return ram_[addr];
+	if (in(addr, FLASH_BASE, FLASH_SIZE)) return flash_[addr - FLASH_BASE];
+	if (in(addr, SYS_SRAM_BASE, SYS_SRAM_SIZE)) return sys_sram_[addr - SYS_SRAM_BASE];
+	if (in(addr, MODEM_RAM_BASE, MODEM_RAM_SIZE)) return modem_ram_[addr - MODEM_RAM_BASE];
+	return 0;
 }
 
 void Machine::uart_push_rx(int idx, uint8_t b)
@@ -996,14 +1025,14 @@ void Machine::mmio_write(uint32_t addr, uint32_t value, uint32_t size)
 		switch (addr - PIC_BASE) {
 		case 0x00: pic_.mode = value; break;
 		case 0x04: pic_.po = value; break;
-		case 0x08: pic_.mask = value; break;
+		case 0x08: pic_.mask = value; update_irq(); break;
 		case 0x0C: pic_.vector = value; break;
 		case 0x10: break; // end of interrupt
 		case 0x44: pic_.int_st &= ~value; pic_.latched_lo &= ~value; break;
 		case 0x48: pic_.int_st1 &= ~value; pic_.latched_hi &= ~value; break;
 		case 0x60: pic_.mode1 = value; break;
 		case 0x64: pic_.po1 = value; break;
-		case 0x68: pic_.mask1 = value; break;
+		case 0x68: pic_.mask1 = value; update_irq(); break;
 		default: break;
 		}
 		return;
