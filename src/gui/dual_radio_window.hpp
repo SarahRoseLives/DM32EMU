@@ -10,6 +10,7 @@
 
 class RadioWidget;
 class EmulatorThread;
+class SystemLocation;
 class QCheckBox;
 class QAction;
 class QComboBox;
@@ -65,6 +66,7 @@ private:
 	std::shared_ptr<VirtualRfIqChannel> iq_;
 	Pane panes_[2];
 	QString codecBackup_;
+	SystemLocation *location_ = nullptr;
 	QToolBar *toolbar_ = nullptr;
 	QCheckBox *linkToggle_ = nullptr;
 	QComboBox *tsCombo_ = nullptr;

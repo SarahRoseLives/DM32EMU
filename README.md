@@ -28,9 +28,9 @@ cmake -S . -B build -G Ninja
 cmake --build build
 ```
 
-This builds the command-line emulator `build/dm32emu`. If Qt6 Widgets and
-Network are available, it also builds the GUI `build/dm32gui`. ZLIB is required
-for reading backup ZIPs. No C-SKY toolchain is needed at run time. An ELF is only used for
+This builds the command-line emulator `build/dm32emu`. If Qt6 Widgets,
+Network and DBus are available, it also builds the GUI `build/dm32gui`. ZLIB is
+required for reading backup ZIPs. No C-SKY toolchain is needed at run time. An ELF is only used for
 symbols; the emulator executes the application image itself.
 
 The build uses `-O3`, link-time optimization and, by default, `-march=native`.
@@ -93,17 +93,30 @@ Use `--no-idle-skip` for timing-faithful runs; see [Performance](#performance).
 
 The GUI opens with the radio screen and keypad. Use **File > Open firmware**
 to load an image. The toolbar has Open, Pause, Reset and Save screenshot.
-**File > Open dual radio** opens two radios sharing a virtual RF bus. Use
+**File > Open dual radio** opens two radios sharing one IQ link. Use
 **File > Open codec backup** to install a codec slot from `program-memory.bin`
 or a `DM32UV_Backup_*.zip`; the codec is shared by both radios in dual mode.
 The dual window keeps the radio bodies large and puts loading and control in a
 toolbar: per-radio Firmware, Codeplug, Pause and Reset actions, plus the shared
 codec, IQ link toggle, DMR timeslot selector and link counters. Each radio also
-has an optional DMR ID field. It remembers the last codec, firmware and
-codeplug paths, DMR IDs, RF timeslot and link state. Set different DMR IDs for the two radios, or
-use `--dmr-id-a`/`--dmr-id-b`; this avoids editing a copy of the codeplug.
-Both radios must use the same DMR channel and color code; select the channel's
-DMR timeslot on the shared link.
+has an optional DMR ID field. It remembers the last codec, firmware and codeplug
+paths, DMR IDs, RF timeslot and link state. Set different DMR IDs for the two
+radios, or use `--dmr-id-a`/`--dmr-id-b`; this avoids editing a copy of the
+codeplug. Both radios must use the same DMR channel and color code; select the
+channel's DMR timeslot on the shared link.
+
+The GUI also emulates the ATGM336H GPS module on UART1. It asks the desktop's
+XDG Location portal for the system position and sends 1 Hz RMC/GGA sentences to
+the radio. If location services are unavailable, set a manual fix for testing:
+
+```sh
+DM32EMU_GPS_LAT=51.5074 DM32EMU_GPS_LON=-0.1278 ./build/dm32gui ...
+```
+
+Optional: `DM32EMU_GPS_ALT`, `DM32EMU_GPS_SPEED`, `DM32EMU_GPS_COURSE`,
+`DM32EMU_GPS_SATS`. Set `DM32EMU_GPS_OFF=1` to disable GPS. Location services
+must be enabled in the desktop for the portal path; the offscreen GUI skips GPS
+unless the manual fix variables are set.
 
 ![DM32EMU dual-radio GUI](docs/dm32gui-dual.gif)
 
@@ -181,8 +194,8 @@ ctest --test-dir build --output-on-failure
 ```
 
 This runs the CPU smoke test, the offscreen GUI test, and unit tests for the
-IQ RF channel, C4FM/FM front ends, the modem TX/RX paths, and backup/codec
-handling.
+IQ RF channel, C4FM/FM front ends, the modem TX/RX paths, GPS NMEA, the FD6818
+bus, PCM audio, and backup/codec handling.
 
 Two integration tests use local fixtures and are skipped when their environment
 variables are absent:
@@ -271,7 +284,7 @@ src/firmware.cpp   shared .bin/.elf firmware loader
 src/codec_backup.cpp  backup ZIP/program-memory reader and codec slot builder
 src/rf_channel.cpp  mode-blind IQ channel with a shared sample timeline and impairments
 src/uart_bridge.cpp  UART0 to PTY/TCP bridge for the debug link and CPS tools
-src/gui/           Qt6 GUI: worker thread, radio widget, single and dual windows
+src/gui/           Qt6 GUI: worker thread, radio widget, single and dual windows, system location
 tests/             unit tests and opt-in firmware/codec integration tests
 ```
 
@@ -301,6 +314,8 @@ operations. The DSP/FPU extensions are not implemented.
 - **LCD:** i8080 controller driving an ST7789-class 240x320 RGB565 panel.
 - **FD6818:** three-wire register bus, frequency/mode state, PLL lock, RSSI/noise and a basic FD6818/FM audio path.
 - **Audio:** microphone PCM injection, speaker PCM capture and a host audio sink.
+- **GPS:** ATGM336H NMEA on UART1, power-enable GPIO and the XDG Location portal
+  for the system fix, with manual environment fallback.
 - **Watchdog, ADC, DAC, PWM, I2C2/RTC:** register-level stubs.
 
 ## Adding a peripheral

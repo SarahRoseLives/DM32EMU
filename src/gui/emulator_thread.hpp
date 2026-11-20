@@ -3,6 +3,7 @@
 #pragma once
 
 #include "cpu.hpp"
+#include "machine.hpp"
 #include "rf_channel.hpp"
 #include "uart_bridge.hpp"
 
@@ -20,8 +21,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-class Machine;
 
 Q_DECLARE_METATYPE(CpuSnapshot)
 
@@ -58,6 +57,7 @@ public:
 	}
 	void setIqEnabled(bool on) { iq_enabled_.store(on); }
 	void setDmrTimeslot(uint8_t ts) { dmr_ts_.store(ts); }
+	void setGpsFix(const Machine::GpsFix &fix);
 
 signals:
 	void frameReady(const QImage &image, quint64 frames);
@@ -99,6 +99,9 @@ private:
 	std::atomic<bool> idle_skip_enabled_{true};
 	std::atomic<bool> iq_enabled_{true};
 	std::atomic<uint8_t> dmr_ts_{0};
+	std::mutex gps_mutex_;
+	Machine::GpsFix gps_fix_;
+	bool gps_dirty_ = false;
 	std::shared_ptr<VirtualRfIqChannel> iq_channel_;
 	uint8_t iq_id_ = 0;
 	bool iq_applied_ = false;

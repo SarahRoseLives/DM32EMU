@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <fstream>
 
@@ -285,6 +286,7 @@ void Machine::reset()
 	i2c2_.regs[0x11] = 0x07;
 	i2c2_.regs[0x12] = 0x01;
 	fd_ = {};
+	gps_ = {};
 	mic_fifo_.clear();
 	speaker_pcm_ = {};
 	speaker_pcm_len_ = 0;
@@ -676,6 +678,16 @@ void Machine::fd_pins()
 void Machine::gpio_apply_outputs(int bank, uint32_t old_dr)
 {
 	(void)old_dr;
+	if (bank == 1) {
+		const Gpio &g = gpio_[1];
+		const uint32_t bit = 1u << (0x2Cu - 32u);
+		const bool on = ((g.ddr & bit) != 0) && ((g.dr & bit) == 0);
+		if (on != gps_.power_on) {
+			gps_.power_on = on;
+			gps_.next_apb = on ? apb_cycles_ + 84000000ull : 0;
+		}
+		return;
+	}
 	if (bank != 0) return;
 	const Gpio &g = gpio_[0];
 	// PTA18 is the data-flash chip select, low active.
@@ -740,6 +752,64 @@ void Machine::gpio_write(int bank, uint32_t off, uint32_t value, uint32_t size)
 	}
 }
 
+void Machine::gps_sentence(const char *body)
+{
+	uint8_t checksum = 0;
+	for (const char *p = body; *p != '\0'; p++) checksum ^= (uint8_t)*p;
+	char line[160];
+	std::snprintf(line, sizeof line, "$%s*%02X\r\n", body, checksum);
+	for (const char *p = line; *p != '\0'; p++) feed_uart(1, (uint8_t)*p);
+}
+
+void Machine::gps_tick()
+{
+	if (!gps_.power_on) {
+		gps_.next_apb = 0;
+		return;
+	}
+	if (gps_.next_apb == 0) gps_.next_apb = apb_cycles_ + 84000000ull;
+	if (apb_cycles_ < gps_.next_apb) return;
+
+	const GpsFix &f = gps_.fix;
+	std::time_t now = std::time(nullptr);
+	std::tm tm{};
+	gmtime_r(&now, &tm);
+	char utc[16], date[16];
+	std::snprintf(utc, sizeof utc, "%02d%02d%02d.00", tm.tm_hour, tm.tm_min, tm.tm_sec);
+	std::snprintf(date, sizeof date, "%02d%02d%02d", tm.tm_mday, tm.tm_mon + 1, (tm.tm_year + 1900) % 100);
+
+	char rmc[128];
+	if (f.valid) {
+		const bool south = f.latitude < 0, west = f.longitude < 0;
+		const double alat = std::fabs(f.latitude), alon = std::fabs(f.longitude);
+		const int lat_deg = (int)alat, lon_deg = (int)alon;
+		const double lat_min = (alat - lat_deg) * 60.0, lon_min = (alon - lon_deg) * 60.0;
+		std::snprintf(rmc, sizeof rmc, "GPRMC,%s,A,%02d%07.4f,%c,%03d%07.4f,%c,%.1f,%.1f,%s,0.0,E,A",
+			      utc, lat_deg, lat_min, south ? 'S' : 'N', lon_deg, lon_min, west ? 'W' : 'E',
+			      f.speed_mps * 1.943844, f.course_deg, date);
+	} else {
+		std::snprintf(rmc, sizeof rmc, "GPRMC,%s,V,,,,,,,0.0,0.0,%s,0.0,E,N", utc, date);
+	}
+	gps_sentence(rmc);
+
+	char gga[128];
+	if (f.valid) {
+		const bool south = f.latitude < 0, west = f.longitude < 0;
+		const double alat = std::fabs(f.latitude), alon = std::fabs(f.longitude);
+		const int lat_deg = (int)alat, lon_deg = (int)alon;
+		const double lat_min = (alat - lat_deg) * 60.0, lon_min = (alon - lon_deg) * 60.0;
+		std::snprintf(gga, sizeof gga, "GPGGA,%s,%02d%07.4f,%c,%03d%07.4f,%c,1,%02u,1.0,%.1f,M,0.0,M,,",
+			      utc, lat_deg, lat_min, south ? 'S' : 'N', lon_deg, lon_min, west ? 'W' : 'E',
+			      (unsigned)f.satellites, f.altitude_m);
+	} else {
+		std::snprintf(gga, sizeof gga, "GPGGA,%s,,,,,0,00,99.9,,,,,", utc);
+	}
+	gps_sentence(gga);
+
+	gps_.next_apb += 84000000ull;
+	if (gps_.next_apb <= apb_cycles_) gps_.next_apb = apb_cycles_ + 84000000ull;
+}
+
 uint32_t Machine::timer_value(int n) const
 {
 	const Timer &t = timers_[n];
@@ -754,6 +824,7 @@ void Machine::tick(uint64_t cycles)
 {
 	apb_cycles_ = cycles / 2; // CPU/AHB 168 MHz, APB 84 MHz
 	rf_sample_time_ = cycles / 700u; // 240 kHz RF sample timeline
+	gps_tick();
 	for (int i = 0; i < 6; i++) {
 		Timer &t = timers_[i];
 		if (!(t.ctrl & 1u)) continue;

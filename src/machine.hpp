@@ -22,6 +22,16 @@
 
 class Machine {
 public:
+	struct GpsFix {
+		bool valid = false;
+		double latitude = 0.0;
+		double longitude = 0.0;
+		double altitude_m = 0.0;
+		double speed_mps = 0.0;
+		double course_deg = 0.0;
+		uint8_t satellites = 8;
+	};
+
 	static constexpr uint32_t FLASH_BASE = 0x03000000;
 	static constexpr uint32_t FLASH_SIZE = 0x00100000;
 	static constexpr uint32_t APP_BASE = 0x0300C000;
@@ -72,6 +82,7 @@ public:
 	bool iq_enabled() const { return iq_enabled_; }
 	void set_audio_sink(std::function<void(const int16_t *, size_t)> sink) { audio_sink_ = std::move(sink); }
 	void inject_microphone_samples(const int16_t *samples, size_t count);
+	void set_gps_fix(const GpsFix &fix) { gps_.fix = fix; }
 	bool irq_pending() const { return irq_asserted_; }
 	int irq_source() const;
 	void clear_irq(int source);
@@ -111,6 +122,14 @@ private:
 	uint64_t rf_sample_time_ = 0;
 	uint64_t pcm_next_apb_ = 0;
 	uint64_t fm_tx_next_apb_ = 0;
+	struct GpsState {
+		bool power_on = false;
+		uint64_t next_apb = 0;
+		GpsFix fix;
+	};
+	GpsState gps_;
+	void gps_tick();
+	void gps_sentence(const char *body);
 	uint32_t pcm_phase_ = 0;
 	std::vector<uint8_t> dmr_rx_dibits_;
 	uint8_t dmr_seq_ = 0;

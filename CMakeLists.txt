@@ -46,19 +46,20 @@ enable_testing()
 add_test(NAME cpu_smoke COMMAND dm32emu --self-test)
 add_subdirectory(tests)
 
-find_package(Qt6 COMPONENTS Widgets Network QUIET)
-if(Qt6Widgets_FOUND AND Qt6Network_FOUND)
+find_package(Qt6 COMPONENTS Widgets Network DBus QUIET)
+if(Qt6Widgets_FOUND AND Qt6Network_FOUND AND Qt6DBus_FOUND)
   set(CMAKE_AUTOMOC ON)
   add_executable(dm32gui
     src/gui/main_gui.cpp
     src/gui/radio_widget.cpp
     src/gui/emulator_thread.cpp
     src/gui/dual_radio_window.cpp
+    src/gui/system_location.cpp
   )
   target_include_directories(dm32gui PRIVATE src/gui)
-  target_link_libraries(dm32gui PRIVATE dm32core Qt6::Widgets Qt6::Network)
+  target_link_libraries(dm32gui PRIVATE dm32core Qt6::Widgets Qt6::Network Qt6::DBus)
   add_test(NAME gui_offscreen COMMAND dm32gui --smoke-test)
   set_tests_properties(gui_offscreen PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 else()
-  message(STATUS "Qt6 Widgets/Network not found; the dm32gui target is disabled")
+  message(STATUS "Qt6 Widgets/Network/DBus not found; the dm32gui target is disabled")
 endif()

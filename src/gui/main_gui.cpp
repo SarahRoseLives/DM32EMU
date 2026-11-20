@@ -4,6 +4,7 @@
 #include "dual_radio_window.hpp"
 #include "emulator_thread.hpp"
 #include "radio_widget.hpp"
+#include "system_location.hpp"
 
 #include <QAction>
 #include <QApplication>
@@ -234,6 +235,7 @@ private:
 	void updatePcLabel();
 
 	EmulatorThread emulator_;
+	SystemLocation *location_ = nullptr;
 	RadioWidget *radio_ = nullptr;
 	QDockWidget *debug_dock_ = nullptr;
 	QTabWidget *debug_tabs_ = nullptr;
@@ -301,6 +303,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 	connect(&emulator_, &EmulatorThread::uartRx, this,
 		[this](const QByteArray &data) { appendUart(data, false); });
 	connect(radio_, &RadioWidget::keyChanged, &emulator_, &EmulatorThread::setKey);
+	location_ = new SystemLocation(this);
+	connect(location_, &SystemLocation::fixReady, this,
+		[this](const Machine::GpsFix &fix) { emulator_.setGpsFix(fix); });
 }
 
 void MainWindow::createActions()

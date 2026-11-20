@@ -122,6 +122,13 @@ void EmulatorThread::stop()
 	bridge_.close();
 }
 
+void EmulatorThread::setGpsFix(const Machine::GpsFix &fix)
+{
+	std::lock_guard<std::mutex> lock(gps_mutex_);
+	gps_fix_ = fix;
+	gps_dirty_ = true;
+}
+
 void EmulatorThread::setKey(const QString &name, bool pressed)
 {
 	std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -399,6 +406,13 @@ void EmulatorThread::run()
 		if (want_idle != idle_skip_applied_) {
 			idle_skip_applied_ = want_idle;
 			cpu_->set_idle_range(want_idle ? idle_lo_ : 0, want_idle ? idle_hi_ : 0);
+		}
+		{
+			std::lock_guard<std::mutex> lock(gps_mutex_);
+			if (gps_dirty_ && machine_) {
+				machine_->set_gps_fix(gps_fix_);
+				gps_dirty_ = false;
+			}
 		}
 		processCommands();
 		applyKeys();

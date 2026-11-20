@@ -3,6 +3,7 @@
 #include "dual_radio_window.hpp"
 
 #include "emulator_thread.hpp"
+#include "system_location.hpp"
 #include "radio_widget.hpp"
 
 #include <QAction>
@@ -40,6 +41,12 @@ DualRadioWindow::DualRadioWindow(QWidget *parent) : QMainWindow(parent)
 	if (!backups.isEmpty()) codecBackup_ = docs.filePath(backups.first());
 
 	buildUi();
+	location_ = new SystemLocation(this);
+	connect(location_, &SystemLocation::fixReady, this, [this](const Machine::GpsFix &fix) {
+		for (auto &p : panes_) {
+			if (p.emu) p.emu->setGpsFix(fix);
+		}
+	});
 	statsTimer_ = new QTimer(this);
 	connect(statsTimer_, &QTimer::timeout, this, &DualRadioWindow::updateLinkStats);
 	statsTimer_->start(200);
