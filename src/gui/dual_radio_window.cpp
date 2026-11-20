@@ -5,6 +5,7 @@
 #include "emulator_thread.hpp"
 #include "radio_widget.hpp"
 
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCloseEvent>
@@ -22,13 +23,16 @@
 #include <QSettings>
 #include <QStatusBar>
 #include <QTimer>
+#include <QToolBar>
 #include <QVBoxLayout>
+
+#include <functional>
 
 DualRadioWindow::DualRadioWindow(QWidget *parent) : QMainWindow(parent)
 {
 	setWindowTitle(QStringLiteral("DM32EMU - Dual Radio"));
-	setMinimumSize(1100, 760);
-	resize(1500, 1000);
+	setMinimumSize(1150, 780);
+	resize(1700, 1100);
 	iq_ = std::make_shared<VirtualRfIqChannel>();
 
 	QDir docs(QDir::homePath() + QStringLiteral("/Documents"));
@@ -58,48 +62,68 @@ void DualRadioWindow::buildUi()
 {
 	auto *central = new QWidget(this);
 	auto *root = new QVBoxLayout(central);
-
-	auto *shared = new QGroupBox(QStringLiteral("Virtual RF and codec"), central);
-	auto *sharedRow = new QHBoxLayout(shared);
-	codecLabel_ = new QLabel(shared);
-	codecLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-	codecLabel_->setMinimumWidth(380);
-	auto *codecButton = new QPushButton(QStringLiteral("Codec backup..."), shared);
-	linkToggle_ = new QCheckBox(QStringLiteral("Virtual RF link"), shared);
-	linkToggle_->setChecked(true);
-	tsCombo_ = new QComboBox(shared);
-	tsCombo_->addItem(QStringLiteral("DMR TS auto"), 0);
-	tsCombo_->addItem(QStringLiteral("DMR TS1"), 1);
-	tsCombo_->addItem(QStringLiteral("DMR TS2"), 2);
-	linkStats_ = new QLabel(shared);
-	auto *clear = new QPushButton(QStringLiteral("Clear RF queue"), shared);
-	sharedRow->addWidget(codecLabel_, 1);
-	sharedRow->addWidget(codecButton);
-	sharedRow->addSpacing(16);
-	sharedRow->addWidget(linkToggle_);
-	sharedRow->addWidget(tsCombo_);
-	sharedRow->addWidget(linkStats_);
-	sharedRow->addWidget(clear);
-	root->addWidget(shared);
+	root->setContentsMargins(4, 4, 4, 4);
+	root->setSpacing(4);
 
 	auto *radios = new QHBoxLayout();
+	radios->setSpacing(6);
 	root->addLayout(radios, 1);
 	buildPane(0);
 	buildPane(1);
 	radios->addWidget(panes_[0].box, 1);
 	radios->addWidget(panes_[1].box, 1);
 
-	auto *hint = new QLabel(QStringLiteral(
-		"Both radios share one IQ channel. Press PTT on either keypad; the "
-		"waveform is carried unchanged, so any mode can use the same link."), central);
-	hint->setWordWrap(true);
-	root->addWidget(hint);
-
 	setCentralWidget(central);
-	statusBar()->showMessage(QStringLiteral("Open a firmware for each radio"));
 
-	connect(codecButton, &QPushButton::clicked, this, &DualRadioWindow::chooseCodec);
-	connect(clear, &QPushButton::clicked, this, [this] { iq_->clear(); updateLinkStats(); });
+	toolbar_ = addToolBar(QStringLiteral("Radios"));
+	toolbar_->setMovable(false);
+	toolbar_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+
+	auto addRadioAction = [&](const QString &text, const std::function<void()> &fn) {
+		QAction *a = toolbar_->addAction(text);
+		connect(a, &QAction::triggered, this, fn);
+		return a;
+	};
+
+	for (int side = 0; side < 2; side++) {
+		const QString prefix = side == 0 ? QStringLiteral("A ") : QStringLiteral("B ");
+		addRadioAction(prefix + QStringLiteral("Firmware..."), [this, side] { openFirmware(side); });
+		addRadioAction(prefix + QStringLiteral("Codeplug..."), [this, side] { openData(side); });
+		QAction *pause = toolbar_->addAction(prefix + QStringLiteral("Pause"));
+		pause->setCheckable(true);
+		panes_[side].pauseAction = pause;
+		connect(pause, &QAction::toggled, this, [this, side, pause](bool on) {
+			panes_[side].emu->setPaused(on);
+			pause->setText((side == 0 ? QStringLiteral("A ") : QStringLiteral("B ")) +
+				       (on ? QStringLiteral("Resume") : QStringLiteral("Pause")));
+		});
+		addRadioAction(prefix + QStringLiteral("Reset"), [this, side] { reload(side); });
+		if (side == 0) toolbar_->addSeparator();
+	}
+
+	toolbar_->addSeparator();
+	addRadioAction(QStringLiteral("Codec backup..."), [this] { chooseCodec(); });
+	codecLabel_ = new QLabel(toolbar_);
+	codecLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	codecLabel_->setMinimumWidth(120);
+	toolbar_->addWidget(codecLabel_);
+	toolbar_->addSeparator();
+
+	linkToggle_ = new QCheckBox(QStringLiteral("Link"), toolbar_);
+	linkToggle_->setChecked(true);
+	toolbar_->addWidget(linkToggle_);
+	toolbar_->addWidget(new QLabel(QStringLiteral("DMR TS"), toolbar_));
+	tsCombo_ = new QComboBox(toolbar_);
+	tsCombo_->addItem(QStringLiteral("Auto"), 0);
+	tsCombo_->addItem(QStringLiteral("TS1"), 1);
+	tsCombo_->addItem(QStringLiteral("TS2"), 2);
+	toolbar_->addWidget(tsCombo_);
+	addRadioAction(QStringLiteral("Clear IQ"), [this] { iq_->clear(); updateLinkStats(); });
+
+	linkStats_ = new QLabel(this);
+	statusBar()->addPermanentWidget(linkStats_);
+	statusBar()->showMessage(QStringLiteral("Both radios share one IQ channel; use the toolbar to load and control each radio."));
+
 	connect(tsCombo_, &QComboBox::currentIndexChanged, this, [this](int) {
 		const uint8_t ts = (uint8_t)tsCombo_->currentData().toUInt();
 		for (auto &p : panes_) p.emu->setDmrTimeslot(ts);
@@ -113,58 +137,47 @@ void DualRadioWindow::buildUi()
 void DualRadioWindow::buildPane(int side)
 {
 	Pane &p = panes_[side];
-	p.box = new QGroupBox(side == 0 ? QStringLiteral("Radio A") : QStringLiteral("Radio B"), this);
+	p.box = new QGroupBox(this);
 	auto *layout = new QVBoxLayout(p.box);
-	auto *buttons = new QHBoxLayout();
-	auto *fw = new QPushButton(QStringLiteral("Firmware..."), p.box);
-	auto *data = new QPushButton(QStringLiteral("Codeplug..."), p.box);
-	auto *pause = new QPushButton(QStringLiteral("Pause"), p.box);
-	pause->setCheckable(true);
-	auto *reset = new QPushButton(QStringLiteral("Reset"), p.box);
-	buttons->addWidget(fw);
-	buttons->addWidget(data);
-	buttons->addWidget(pause);
-	buttons->addWidget(reset);
-	buttons->addStretch(1);
-	layout->addLayout(buttons);
+	layout->setContentsMargins(6, 6, 6, 6);
+	layout->setSpacing(4);
 
-	p.firmware = new QLabel(QStringLiteral("firmware: -"), p.box);
-	p.data = new QLabel(QStringLiteral("codeplug: -"), p.box);
-	p.status = new QLabel(QStringLiteral("stopped"), p.box);
-	p.pc = new QLabel(QStringLiteral("PC -"), p.box);
+	auto *header = new QHBoxLayout();
+	p.title = new QLabel(side == 0 ? QStringLiteral("Radio A") : QStringLiteral("Radio B"), p.box);
+	QFont titleFont = p.title->font();
+	titleFont.setBold(true);
+	titleFont.setPixelSize(15);
+	p.title->setFont(titleFont);
 	p.dmrId = new QLineEdit(p.box);
-	p.dmrId->setPlaceholderText(QStringLiteral("codeplug ID"));
+	p.dmrId->setPlaceholderText(QStringLiteral("DMR ID"));
 	p.dmrId->setValidator(new QIntValidator(1, 0xFFFFFF, p.dmrId));
+	p.dmrId->setMaximumWidth(110);
 	p.dmrId->setToolTip(QStringLiteral("Optional own DMR ID; applied on Reset or firmware load."));
-	p.firmware->setTextInteractionFlags(Qt::TextSelectableByMouse);
-	p.data->setTextInteractionFlags(Qt::TextSelectableByMouse);
-	p.pc->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-	layout->addWidget(p.firmware);
-	layout->addWidget(p.data);
-	auto *idRow = new QHBoxLayout();
-	idRow->addWidget(new QLabel(QStringLiteral("DMR ID:"), p.box));
-	idRow->addWidget(p.dmrId, 1);
-	layout->addLayout(idRow);
-	layout->addWidget(p.status);
-	layout->addWidget(p.pc);
+	header->addWidget(p.title);
+	header->addStretch(1);
+	header->addWidget(new QLabel(QStringLiteral("ID"), p.box));
+	header->addWidget(p.dmrId);
+	layout->addLayout(header);
 
 	p.radio = new RadioWidget(p.box);
 	layout->addWidget(p.radio, 1);
 
+	auto *footer = new QHBoxLayout();
+	p.status = new QLabel(QStringLiteral("stopped"), p.box);
+	p.pc = new QLabel(QStringLiteral("PC -"), p.box);
+	p.pc->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+	footer->addWidget(p.status);
+	footer->addStretch(1);
+	footer->addWidget(p.pc);
+	layout->addLayout(footer);
+
 	p.emu = new EmulatorThread(this);
 	p.emu->setIqChannel(iq_, (uint8_t)side);
-	p.emu->setIqEnabled(linkToggle_->isChecked());
-	p.emu->setDmrTimeslot((uint8_t)tsCombo_->currentData().toUInt());
+	p.emu->setIqEnabled(linkToggle_ ? linkToggle_->isChecked() : true);
+	p.emu->setDmrTimeslot(tsCombo_ ? (uint8_t)tsCombo_->currentData().toUInt() : 0);
 	p.emu->setIdleSkip(true);
 
-	connect(fw, &QPushButton::clicked, this, [this, side] { openFirmware(side); });
-	connect(data, &QPushButton::clicked, this, [this, side] { openData(side); });
-	connect(reset, &QPushButton::clicked, this, [this, side] { reload(side); });
 	connect(p.dmrId, &QLineEdit::returnPressed, this, [this, side] { reload(side); });
-	connect(pause, &QPushButton::toggled, this, [this, side, pause](bool on) {
-		panes_[side].emu->setPaused(on);
-		pause->setText(on ? QStringLiteral("Resume") : QStringLiteral("Pause"));
-	});
 	connect(p.radio, &RadioWidget::keyChanged, p.emu, &EmulatorThread::setKey);
 	connect(p.emu, &EmulatorThread::frameReady, this,
 		[this, side](const QImage &img, quint64) { panes_[side].radio->setFrame(img); });
@@ -201,10 +214,11 @@ void DualRadioWindow::loadSettings()
 		p.firmwarePath = settings.value(QStringLiteral("dual/%1/firmware").arg(side)).toString();
 		p.dataPath = settings.value(QStringLiteral("dual/%1/data").arg(side)).toString();
 		p.dmrId->setText(settings.value(QStringLiteral("dual/%1/dmr_id").arg(side)).toString());
-		if (!p.firmwarePath.isEmpty())
-			p.firmware->setText(QStringLiteral("firmware: ") + QFileInfo(p.firmwarePath).fileName());
-		if (!p.dataPath.isEmpty())
-			p.data->setText(QStringLiteral("codeplug: ") + QFileInfo(p.dataPath).fileName());
+		QString tip;
+		if (!p.firmwarePath.isEmpty()) tip += QStringLiteral("Firmware: ") + p.firmwarePath;
+		if (!p.dataPath.isEmpty()) tip += (tip.isEmpty() ? QString() : QStringLiteral("\n")) +
+						QStringLiteral("Codeplug: ") + p.dataPath;
+		p.title->setToolTip(tip);
 	}
 	setCodecLabel();
 	updateLinkStats();
@@ -266,9 +280,9 @@ void DualRadioWindow::loadRadio(int side, const QString &firmware, const QString
 	if (!dataBackup.isNull()) p.dataPath = dataBackup;
 	if (dmrId != 0) p.dmrId->setText(QString::number(dmrId));
 	saveSettings();
-	p.firmware->setText(QStringLiteral("firmware: ") + QFileInfo(firmware).fileName());
-	p.data->setText(p.dataPath.isEmpty() ? QStringLiteral("codeplug: built-in/default")
-					     : QStringLiteral("codeplug: ") + QFileInfo(p.dataPath).fileName());
+	QString tip = QStringLiteral("Firmware: ") + firmware;
+	if (!p.dataPath.isEmpty()) tip += QStringLiteral("\nCodeplug: ") + p.dataPath;
+	p.title->setToolTip(tip);
 	reload(side);
 }
 
@@ -277,7 +291,7 @@ void DualRadioWindow::loadRadioFromPath(int side, const QString &firmware)
 	if (side < 0 || side > 1) return;
 	Pane &p = panes_[side];
 	p.firmwarePath = firmware;
-	p.firmware->setText(QStringLiteral("firmware: ") + QFileInfo(firmware).fileName());
+	p.title->setToolTip(QStringLiteral("Firmware: ") + firmware);
 	reload(side);
 }
 
@@ -299,7 +313,8 @@ void DualRadioWindow::openData(int side)
 		QStringLiteral("Radio backups (*.zip *.bin);;All files (*)"));
 	if (path.isEmpty()) return;
 	panes_[side].dataPath = path;
-	panes_[side].data->setText(QStringLiteral("codeplug: ") + QFileInfo(path).fileName());
+	panes_[side].title->setToolTip(QStringLiteral("Firmware: ") + panes_[side].firmwarePath +
+				       QStringLiteral("\nCodeplug: ") + path);
 	saveSettings();
 	if (!panes_[side].firmwarePath.isEmpty()) reload(side);
 }
@@ -331,6 +346,11 @@ void DualRadioWindow::reload(int side)
 	}
 	p.emu->setIqEnabled(linkToggle_->isChecked());
 	p.emu->setDmrTimeslot((uint8_t)tsCombo_->currentData().toUInt());
+	if (p.pauseAction) {
+		p.pauseAction->setChecked(false);
+		p.pauseAction->setText((side == 0 ? QStringLiteral("A ") : QStringLiteral("B ")) +
+				       QStringLiteral("Pause"));
+	}
 	p.emu->start();
 	p.status->setText(QStringLiteral("running"));
 	statusBar()->showMessage((side == 0 ? QStringLiteral("Radio A: ") : QStringLiteral("Radio B: ")) +

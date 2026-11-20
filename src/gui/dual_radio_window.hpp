@@ -11,11 +11,13 @@
 class RadioWidget;
 class EmulatorThread;
 class QCheckBox;
+class QAction;
 class QComboBox;
 class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QTimer;
+class QToolBar;
 
 // Two independent radios with a shared virtual RF medium.
 class DualRadioWindow : public QMainWindow {
@@ -37,11 +39,11 @@ private:
 		QGroupBox *box = nullptr;
 		RadioWidget *radio = nullptr;
 		EmulatorThread *emu = nullptr;
-		QLabel *firmware = nullptr;
-		QLabel *data = nullptr;
+		QLabel *title = nullptr;
 		QLabel *status = nullptr;
 		QLabel *pc = nullptr;
 		QLineEdit *dmrId = nullptr;
+		QAction *pauseAction = nullptr;
 		QString firmwarePath;
 		QString dataPath;
 	};
@@ -61,6 +63,7 @@ private:
 	std::shared_ptr<VirtualRfIqChannel> iq_;
 	Pane panes_[2];
 	QString codecBackup_;
+	QToolBar *toolbar_ = nullptr;
 	QCheckBox *linkToggle_ = nullptr;
 	QComboBox *tsCombo_ = nullptr;
 	QLabel *linkStats_ = nullptr;

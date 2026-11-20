@@ -96,9 +96,10 @@ to load an image. The toolbar has Open, Pause, Reset and Save screenshot.
 **File > Open dual radio** opens two radios sharing a virtual RF bus. Use
 **File > Open codec backup** to install a codec slot from `program-memory.bin`
 or a `DM32UV_Backup_*.zip`; the codec is shared by both radios in dual mode.
-The dual window has firmware and codeplug buttons for each radio, an optional
-per-radio DMR ID, one virtual IQ link toggle, a DMR timeslot selector, and live
-sent/delivered/dropped counters. It remembers the last codec, firmware and
+The dual window keeps the radio bodies large and puts loading and control in a
+toolbar: per-radio Firmware, Codeplug, Pause and Reset actions, plus the shared
+codec, IQ link toggle, DMR timeslot selector and link counters. Each radio also
+has an optional DMR ID field. It remembers the last codec, firmware and
 codeplug paths, DMR IDs, RF timeslot and link state. Set different DMR IDs for the two radios, or
 use `--dmr-id-a`/`--dmr-id-b`; this avoids editing a copy of the codeplug.
 Both radios must use the same DMR channel and color code; select the channel's

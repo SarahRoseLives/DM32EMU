@@ -862,6 +862,13 @@ int main(int argc, char **argv)
 			if (!fb.isEmpty()) w->loadRadio(1, fb, db, idb_ok ? idb : 0);
 		});
 		if (parser.isSet(smoke)) QTimer::singleShot(200, &app, &QApplication::quit);
+		const QString shot = parser.value(windowShot);
+		if (!shot.isEmpty()) {
+			QTimer::singleShot(1500, w, [w, shot] {
+				w->grab().save(shot);
+				QApplication::quit();
+			});
+		}
 		return app.exec();
 	}
 
