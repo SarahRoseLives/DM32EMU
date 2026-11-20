@@ -78,8 +78,8 @@ void RadioWidget::rebuild()
 	key("#", "#", 2, 3, {}, 20);
 
 	buttons_.push_back({"ptt", "PTT", QRectF(30, 340, 34, 132), QColor("#b06426"), true, 14, {}, 10});
-	buttons_.push_back({"sk1", "SK1", QRectF(456, 340, 34, 70), QColor("#3b4048"), true, 13, {}, 10});
-	buttons_.push_back({"sk2", "SK2", QRectF(456, 420, 34, 70), QColor("#3b4048"), true, 13, {}, 10});
+	buttons_.push_back({"sk1", "SK1", QRectF(30, 480, 34, 70), QColor("#3b4048"), true, 13, {}, 10});
+	buttons_.push_back({"sk2", "SK2", QRectF(30, 558, 34, 70), QColor("#3b4048"), true, 13, {}, 10});
 }
 
 QSize RadioWidget::sizeHint() const { return QSize(560, 980); }
