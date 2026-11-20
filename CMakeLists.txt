@@ -28,9 +28,12 @@ add_library(dm32core STATIC
   src/firmware.cpp
   src/codec_backup.cpp
   src/hr_c7000_modem.cpp
+  src/rf_channel.cpp
+  src/rf_frontend.cpp
+  src/c4fm_frontend.cpp
+  src/packet_frontend.cpp
   src/cpu.cpp
   src/machine.cpp
-  src/virtual_rf.cpp
   src/uart_bridge.cpp
 )
 target_include_directories(dm32core PUBLIC src)

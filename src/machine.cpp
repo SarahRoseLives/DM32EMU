@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 
@@ -89,7 +90,93 @@ Machine::Machine() : modem_(modem_ram_, [this](int source) { pic_raise(source); 
 	reset();
 }
 
-Machine::~Machine() = default;
+Machine::~Machine()
+{
+	if (iq_channel_) iq_channel_->remove_receiver(iq_id_);
+}
+
+void Machine::transmit_dmr(const DmrBurst &burst)
+{
+	if (!packet_ || !iq_enabled_ || !iq_channel_) return;
+	uint8_t bytes[36]{};
+	bytes[0] = 0x44;
+	bytes[1] = 0x4D;
+	bytes[2] = burst.source;
+	bytes[3] = burst.kind;
+	bytes[4] = burst.voice_index;
+	bytes[5] = burst.cc;
+	bytes[6] = burst.ts;
+	bytes[7] = burst.len;
+	bytes[8] = dmr_seq_++;
+	std::copy_n(burst.payload, std::min<size_t>(burst.len, 27), bytes + 9);
+	uint8_t dibits[144]{};
+	for (size_t k = 0; k < 144; k++) {
+		const uint8_t byte = bytes[k / 4];
+		dibits[k] = (uint8_t)((byte >> (6 - 2 * (k & 3))) & 3u);
+	}
+	packet_->transmit_dibits(dibits, 144);
+}
+
+void Machine::receive_dibits(const uint8_t *dibits, size_t count)
+{
+	if (dibits == nullptr || count == 0) return;
+	dmr_rx_dibits_.insert(dmr_rx_dibits_.end(), dibits, dibits + count);
+	while (dmr_rx_dibits_.size() >= 144) {
+		uint8_t bytes[36]{};
+		for (size_t k = 0; k < 144; k++)
+			bytes[k / 4] = (uint8_t)(bytes[k / 4] | (dmr_rx_dibits_[k] << (6 - 2 * (k & 3))));
+		dmr_rx_dibits_.erase(dmr_rx_dibits_.begin(), dmr_rx_dibits_.begin() + 144);
+		if (bytes[0] != 0x44 || bytes[1] != 0x4D) continue;
+		DmrBurst burst;
+		burst.source = bytes[2];
+		burst.kind = bytes[3];
+		burst.voice_index = bytes[4];
+		burst.cc = bytes[5];
+		burst.ts = bytes[6];
+		burst.len = (uint8_t)std::min<size_t>(bytes[7], 27);
+		std::copy_n(bytes + 9, burst.len, burst.payload);
+		modem_.inject_burst(burst);
+	}
+}
+
+void Machine::attach_iq_channel(std::shared_ptr<VirtualRfIqChannel> channel, uint8_t id)
+{
+	if (iq_channel_) iq_channel_->remove_receiver(iq_id_);
+	iq_channel_ = std::move(channel);
+	iq_id_ = id;
+	if (!iq_channel_) {
+		air_.reset();
+		packet_.reset();
+		modem_.set_burst_sink({});
+		modem_.set_phy_block_sink({});
+		return;
+	}
+	iq_channel_->add_receiver(id);
+	air_ = std::make_unique<C4fmFrontend>();
+	air_->set_iq_sink([this](const IqSample *samples, size_t count) {
+		if (iq_enabled_ && iq_channel_) iq_channel_->transmit(iq_id_, samples, count);
+	});
+	air_->set_discriminator_sink([this](const int16_t *samples, size_t count) {
+		modem_.inject_discriminator_samples(samples, count);
+	});
+	packet_ = std::make_unique<PacketFrontend>();
+	packet_->set_iq_sink([this](const IqSample *samples, size_t count) {
+		if (iq_enabled_ && iq_channel_) iq_channel_->transmit(iq_id_, samples, count);
+	});
+	packet_->set_dibit_sink([this](const uint8_t *dibits, size_t count) {
+		receive_dibits(dibits, count);
+	});
+	modem_.set_burst_sink([this](const DmrBurst &burst) { transmit_dmr(burst); });
+	modem_.set_phy_block_sink([this](const uint8_t *block, size_t count) {
+		if (count != 36 || !air_) return;
+		uint8_t dibits[144];
+		for (size_t k = 0; k < 144; k++) {
+			const size_t bit = k * 2;
+			dibits[k] = (uint8_t)((block[bit / 8] >> (6 - (bit & 6))) & 3u);
+		}
+		air_->transmit_dibits(dibits, 144);
+	});
+}
 
 void Machine::reset()
 {
@@ -529,7 +616,29 @@ void Machine::tick(uint64_t cycles)
 			}
 		}
 	}
+	if (iq_enabled_ && iq_channel_) {
+		std::vector<IqSample> iq;
+		while (iq_channel_->receive(iq_id_, iq)) {
+			if (air_) air_->receive_iq(iq.data(), iq.size());
+			if (packet_) packet_->receive_iq(iq.data(), iq.size());
+		}
+	}
 	modem_.tick(apb_cycles_);
+	if (modem_.pcm_mic_enabled()) {
+		if (pcm_next_apb_ == 0) pcm_next_apb_ = apb_cycles_ + 840000ull;
+		if (apb_cycles_ >= pcm_next_apb_) {
+			for (uint32_t i = 0; i < 80; i++) {
+				const int16_t sample = (int16_t)(8000.0 * std::sin(2.0 * M_PI * 1000.0 * pcm_phase_ / 8000.0));
+				write16(SYS_SRAM_BASE + 2u * i, (uint16_t)sample);
+				pcm_phase_ = (pcm_phase_ + 1u) % 8000u;
+			}
+			pic_raise(28);
+			pcm_next_apb_ += 840000ull;
+			if (pcm_next_apb_ <= apb_cycles_) pcm_next_apb_ = apb_cycles_ + 840000ull;
+		}
+	} else {
+		pcm_next_apb_ = 0;
+	}
 }
 
 void Machine::update_irq()

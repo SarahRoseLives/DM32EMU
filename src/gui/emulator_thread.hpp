@@ -3,8 +3,8 @@
 #pragma once
 
 #include "cpu.hpp"
+#include "rf_channel.hpp"
 #include "uart_bridge.hpp"
-#include "virtual_rf.hpp"
 
 #include <QByteArray>
 #include <QImage>
@@ -51,12 +51,13 @@ public:
 	void clearBreakpoints();
 	void sendUart(const QByteArray &data);
 	void setIdleSkip(bool on) { idle_skip_enabled_.store(on); }
-	void setVirtualRf(std::shared_ptr<VirtualRfBus> bus, uint8_t id)
+	void setIqChannel(std::shared_ptr<VirtualRfIqChannel> channel, uint8_t id)
 	{
-		virtual_bus_ = std::move(bus);
-		virtual_id_ = id;
+		iq_channel_ = std::move(channel);
+		iq_id_ = id;
 	}
-	void setVirtualRfEnabled(bool on) { virtual_enabled_.store(on); }
+	void setIqEnabled(bool on) { iq_enabled_.store(on); }
+	void setDmrTimeslot(uint8_t ts) { dmr_ts_.store(ts); }
 
 signals:
 	void frameReady(const QImage &image, quint64 frames);
@@ -96,10 +97,11 @@ private:
 	std::atomic<bool> stop_{false};
 	std::atomic<bool> paused_{false};
 	std::atomic<bool> idle_skip_enabled_{true};
-	std::atomic<bool> virtual_enabled_{false};
-	std::shared_ptr<VirtualRfBus> virtual_bus_;
-	uint8_t virtual_id_ = 0;
-	bool virtual_applied_ = false;
+	std::atomic<bool> iq_enabled_{true};
+	std::atomic<uint8_t> dmr_ts_{0};
+	std::shared_ptr<VirtualRfIqChannel> iq_channel_;
+	uint8_t iq_id_ = 0;
+	bool iq_applied_ = false;
 
 	std::mutex queue_mutex_;
 	std::deque<std::pair<std::string, bool>> key_queue_;

@@ -8,16 +8,17 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QRadialGradient>
 #include <QtMath>
 
 namespace {
 
 constexpr double CANVAS_W = 520.0;
-constexpr double CANVAS_H = 920.0;
+constexpr double CANVAS_H = 980.0;
 
-const QRectF BODY(70, 20, 380, 870);
-const QRectF SCREEN_BEZEL(126, 74, 268, 332);
-const QRectF SCREEN(140, 80, 240, 320);
+const QRectF BODY(70, 60, 380, 880);
+const QRectF SCREEN_BEZEL(126, 110, 268, 332);
+const QRectF SCREEN(140, 116, 240, 320);
 
 QPointF toCanvas(const QPointF &p, double scale, const QPointF &origin)
 {
@@ -36,45 +37,53 @@ RadioWidget::RadioWidget(QWidget *parent) : QWidget(parent)
 void RadioWidget::rebuild()
 {
 	buttons_.clear();
-	const double x[4] = {114, 190, 266, 342};
-	const double y[5] = {460, 528, 596, 664, 732};
-	const double w = 64, h = 54;
+	const double kx[3] = {146, 236, 326};
+	const double ky[4] = {574, 642, 710, 778};
+	const double kw = 72, kh = 54;
 	const QColor num("#2d3239");
 	const QColor green("#2f8f57");
 	const QColor red("#a83232");
 	const QColor nav("#353b45");
 
-	auto add = [&](const QString &name, const QString &label, int col, int row,
-			   const QColor &color, int fontPx = 18) {
-		buttons_.push_back({name, label, QRectF(x[col], y[row], w, h), color, false, fontPx});
+	auto add = [&](const QString &name, const QString &label, const QRectF &rect,
+		       const QColor &color, int fontPx = 18, const QString &sub = {}) {
+		buttons_.push_back({name, label, rect, color, false, fontPx, sub, 10});
+	};
+	auto key = [&](const QString &name, const QString &label, int col, int row,
+		       const QString &sub = {}, int fontPx = 19) {
+		add(name, label, QRectF(kx[col], ky[row], kw, kh), num, fontPx, sub);
 	};
 
-	add("menu", "MENU", 0, 0, green, 13);
-	add("3", "3", 1, 0, num);
-	add("2", "2", 2, 0, num);
-	add("1", "1", 3, 0, num);
-	add("left", "\u25C0", 0, 1, nav, 18);
-	add("6", "6", 1, 1, num);
-	add("5", "5", 2, 1, num);
-	add("4", "4", 3, 1, num);
-	add("right", "\u25B6", 0, 2, nav, 18);
-	add("9", "9", 1, 2, num);
-	add("8", "8", 2, 2, num);
-	add("7", "7", 3, 2, num);
-	add("back", "BACK", 0, 3, red, 13);
-	add("#", "#", 1, 3, num);
-	add("0", "0", 2, 3, num);
-	add("*", "*", 3, 3, num, 20);
-	add("up", "\u25B2", 1, 4, nav, 18);
-	add("down", "\u25BC", 2, 4, nav, 18);
+	// The four keys in the row under the screen: the left soft/menu key, the
+	// arrows printed P1/P2, and the green up/down navigation. BACK is the red
+	// button below the soft key, as on the radio.
+	add("menu", "MENU", QRectF(120, 470, 64, 44), green, 11);
+	add("left", "P1", QRectF(196, 470, 60, 44), nav, 15, "\u25C0");
+	add("right", "P2", QRectF(262, 470, 60, 44), nav, 15, "\u25B6");
+	add("up", "\u25B2", QRectF(328, 470, 40, 40), green, 19);
+	add("down", "\u25BC", QRectF(328, 514, 40, 40), nav, 16);
+	add("back", "BACK", QRectF(120, 514, 64, 40), red, 11);
 
-	buttons_.push_back({"ptt", "PTT", QRectF(30, 300, 34, 132), QColor("#b06426"), true, 14});
-	buttons_.push_back({"sk1", "SK1", QRectF(456, 300, 34, 70), QColor("#3b4048"), true, 13});
-	buttons_.push_back({"sk2", "SK2", QRectF(456, 380, 34, 70), QColor("#3b4048"), true, 13});
+	key("1", "1", 0, 0);
+	key("2", "2", 1, 0, "ABC");
+	key("3", "3", 2, 0, "DEF");
+	key("4", "4", 0, 1, "GHI");
+	key("5", "5", 1, 1, "JKL");
+	key("6", "6", 2, 1, "MNO");
+	key("7", "7", 0, 2, "PQRS");
+	key("8", "8", 1, 2, "TUV");
+	key("9", "9", 2, 2, "WXYZ");
+	key("*", "*", 0, 3, {}, 20);
+	key("0", "0", 1, 3, "+", 19);
+	key("#", "#", 2, 3, {}, 20);
+
+	buttons_.push_back({"ptt", "PTT", QRectF(30, 340, 34, 132), QColor("#b06426"), true, 14, {}, 10});
+	buttons_.push_back({"sk1", "SK1", QRectF(456, 340, 34, 70), QColor("#3b4048"), true, 13, {}, 10});
+	buttons_.push_back({"sk2", "SK2", QRectF(456, 420, 34, 70), QColor("#3b4048"), true, 13, {}, 10});
 }
 
-QSize RadioWidget::sizeHint() const { return QSize(560, 920); }
-QSize RadioWidget::minimumSizeHint() const { return QSize(380, 680); }
+QSize RadioWidget::sizeHint() const { return QSize(560, 980); }
+QSize RadioWidget::minimumSizeHint() const { return QSize(380, 760); }
 
 void RadioWidget::setFrame(const QImage &frame)
 {
@@ -123,17 +132,40 @@ void RadioWidget::paintEvent(QPaintEvent *)
 	p.setPen(QPen(QColor("#3a424d"), 2));
 	p.drawRoundedRect(BODY.adjusted(2, 2, -2, -2), 36, 36);
 
+	// Antenna and the two top knobs.
+	p.setPen(QPen(QColor(0, 0, 0, 80), 9, Qt::SolidLine, Qt::RoundCap));
+	p.drawLine(QPointF(248, 0), QPointF(248, 66));
+	p.setPen(QPen(QColor("#1a1e24"), 6, Qt::SolidLine, Qt::RoundCap));
+	p.drawLine(QPointF(248, 0), QPointF(248, 66));
+	p.setPen(QPen(QColor("#4a525e"), 2, Qt::SolidLine, Qt::RoundCap));
+	p.drawLine(QPointF(245, 4), QPointF(245, 56));
+	auto knob = [&](double cx, double cy, double radius) {
+		QRadialGradient grad(QPointF(cx - radius * 0.35, cy - radius * 0.4), radius * 1.8);
+		grad.setColorAt(0.0, QColor("#4b535e"));
+		grad.setColorAt(0.55, QColor("#292e35"));
+		grad.setColorAt(1.0, QColor("#101318"));
+		p.setPen(Qt::NoPen);
+		p.setBrush(grad);
+		p.drawEllipse(QPointF(cx, cy), radius, radius);
+		p.setPen(QPen(QColor("#0c0e12"), 2));
+		for (int i = -2; i <= 2; i++)
+			p.drawLine(QPointF(cx - radius * 0.55, cy + i * radius * 0.28),
+				   QPointF(cx + radius * 0.55, cy + i * radius * 0.28));
+	};
+	knob(192, 38, 18);
+	knob(310, 38, 20);
+
 	// Brand and speaker grille.
 	p.setPen(QColor("#d6b45a"));
 	QFont brand("DejaVu Sans", 1);
-	brand.setPixelSize(25);
+	brand.setPixelSize(24);
 	brand.setBold(true);
 	p.setFont(brand);
-	p.drawText(QRectF(BODY.left(), 28, BODY.width(), 30), Qt::AlignHCenter | Qt::AlignVCenter,
+	p.drawText(QRectF(BODY.left(), 62, BODY.width(), 28), Qt::AlignHCenter | Qt::AlignVCenter,
 			 "DM-32UV");
 	p.setPen(QPen(QColor("#454d58"), 2));
 	for (int i = 0; i < 4; i++) {
-		p.drawLine(QPointF(214, 59 + i * 5), QPointF(306, 59 + i * 5));
+		p.drawLine(QPointF(214, 94 + i * 5), QPointF(306, 94 + i * 5));
 	}
 
 	// Screen recess and image.
@@ -177,6 +209,14 @@ void RadioWidget::paintEvent(QPaintEvent *)
 			p.drawText(QRectF(-b.rect.height() / 2, -b.rect.width() / 2, b.rect.height(), b.rect.width()),
 					 Qt::AlignCenter, b.label);
 			p.restore();
+		} else if (!b.sublabel.isEmpty()) {
+			p.drawText(b.rect.adjusted(0, 2, 0, -12), Qt::AlignCenter, b.label);
+			QFont small("DejaVu Sans");
+			small.setPixelSize(b.subPx);
+			small.setBold(true);
+			p.setFont(small);
+			p.setPen(QColor("#b8c0cb"));
+			p.drawText(b.rect.adjusted(0, 24, 0, -2), Qt::AlignCenter, b.sublabel);
 		} else {
 			p.drawText(b.rect, Qt::AlignCenter, b.label);
 		}

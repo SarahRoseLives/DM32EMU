@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Sarah Rose
 #pragma once
 
-#include "virtual_rf.hpp"
+#include "rf_channel.hpp"
 
 #include <QMainWindow>
 #include <QString>
@@ -58,7 +58,7 @@ private:
 	void loadSettings();
 	void saveSettings();
 
-	std::shared_ptr<VirtualRfBus> bus_;
+	std::shared_ptr<VirtualRfIqChannel> iq_;
 	Pane panes_[2];
 	QString codecBackup_;
 	QCheckBox *linkToggle_ = nullptr;

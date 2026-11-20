@@ -38,6 +38,8 @@ private:
 		QColor color;
 		bool vertical = false;
 		int fontPx = 18;
+		QString sublabel;
+		int subPx = 10;
 	};
 
 	void rebuild();

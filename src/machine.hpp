@@ -3,7 +3,11 @@
 #pragma once
 
 #include "elf.hpp"
+#include "c4fm_frontend.hpp"
+#include "dmr_burst.hpp"
 #include "hr_c7000_modem.hpp"
+#include "packet_frontend.hpp"
+#include "rf_channel.hpp"
 
 #include <array>
 #include <cstdint>
@@ -56,9 +60,11 @@ public:
 	void tick(uint64_t cycles);
 	uint64_t cpu_cycles_to_next_timer(uint64_t cycles) const;
 
-	void attach_virtual_rf(std::shared_ptr<VirtualRfBus> bus, uint8_t id) { modem_.attach_virtual_rf(std::move(bus), id); }
-	void set_virtual_rf_enabled(bool on) { modem_.set_virtual_rf_enabled(on); }
-	bool virtual_rf_enabled() const { return modem_.virtual_rf_enabled(); }
+	void attach_iq_channel(std::shared_ptr<VirtualRfIqChannel> channel, uint8_t id);
+	void set_dmr_timeslot(uint8_t ts) { modem_.set_timeslot(ts); }
+	void inject_baseband_samples(const int16_t *samples, size_t count) { modem_.inject_discriminator_samples(samples, count); }
+	void set_iq_enabled(bool on) { iq_enabled_ = on; }
+	bool iq_enabled() const { return iq_enabled_; }
 	bool irq_pending() const { return irq_asserted_; }
 	int irq_source() const;
 	void clear_irq(int source);
@@ -83,6 +89,17 @@ private:
 	std::vector<uint8_t> sys_sram_;
 	std::vector<uint8_t> modem_ram_;
 	HrC7000Modem modem_;
+	std::shared_ptr<VirtualRfIqChannel> iq_channel_;
+	std::unique_ptr<C4fmFrontend> air_;
+	std::unique_ptr<PacketFrontend> packet_;
+	uint8_t iq_id_ = 0;
+	bool iq_enabled_ = false;
+	uint64_t pcm_next_apb_ = 0;
+	uint32_t pcm_phase_ = 0;
+	std::vector<uint8_t> dmr_rx_dibits_;
+	uint8_t dmr_seq_ = 0;
+	void transmit_dmr(const DmrBurst &burst);
+	void receive_dibits(const uint8_t *dibits, size_t count);
 	std::vector<uint8_t> data_flash_;
 	bool irq_asserted_ = false;
 

@@ -9,7 +9,7 @@
 #include "cpu.hpp"
 #include "firmware.hpp"
 #include "machine.hpp"
-#include "virtual_rf.hpp"
+#include "rf_channel.hpp"
 
 #include "test_util.hpp"
 
@@ -128,11 +128,11 @@ int main()
 	CHECK_EQ(a.dmr_id(), 3144613);
 	CHECK_EQ(b.dmr_id(), 3144614);
 
-	auto bus = std::make_shared<VirtualRfBus>();
-	a.attach_virtual_rf(bus, 0);
-	b.attach_virtual_rf(bus, 1);
-	a.set_virtual_rf_enabled(true);
-	b.set_virtual_rf_enabled(true);
+	auto iq = std::make_shared<VirtualRfIqChannel>();
+	a.attach_iq_channel(iq, 0);
+	b.attach_iq_channel(iq, 1);
+	a.set_iq_enabled(true);
+	b.set_iq_enabled(true);
 	std::vector<uint8_t> b_uart;
 	b.set_uart_tx_sink([&](uint8_t c) { b_uart.push_back(c); });
 
@@ -192,8 +192,9 @@ int main()
 		std::fprintf(stderr, "radio B is not on a DMR channel; dmr view:\n%s\n", dmr_view.c_str());
 		return 1;
 	}
-	bus->set_timeslot((uint8_t)channel_ts);
-	std::fprintf(stderr, "virtual RF timeslot: TS%ld\n", channel_ts);
+	std::fprintf(stderr, "DMR channel timeslot: TS%ld\n", channel_ts);
+	a.set_dmr_timeslot((uint8_t)channel_ts);
+	b.set_dmr_timeslot((uint8_t)channel_ts);
 
 	std::string err;
 	CHECK(a.set_key("ptt", true, err));
@@ -202,10 +203,10 @@ int main()
 	run(10000000);
 
 	std::fprintf(stderr, "rf: sent=%llu delivered=%llu dropped=%llu\n",
-		     (unsigned long long)bus->sent(), (unsigned long long)bus->delivered(),
-		     (unsigned long long)bus->dropped());
-	CHECK(bus->sent() > 0);
-	CHECK(bus->delivered() > 0);
+		     (unsigned long long)iq->transmitted_samples(), (unsigned long long)iq->delivered_samples(),
+		     (unsigned long long)iq->dropped_blocks());
+	CHECK(iq->transmitted_samples() > 0);
+	CHECK(iq->delivered_samples() > 0);
 
 	const std::string stats = query_view(4, 0x50);
 	const long calls = value_of(stats, "call.rx_calls=");

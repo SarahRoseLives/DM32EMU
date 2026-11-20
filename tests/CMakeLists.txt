@@ -1,6 +1,14 @@
-add_executable(test_virtual_rf test_virtual_rf.cpp)
-target_link_libraries(test_virtual_rf PRIVATE dm32core)
-add_test(NAME virtual_rf COMMAND test_virtual_rf)
+add_executable(test_rf_channel test_rf_channel.cpp)
+target_link_libraries(test_rf_channel PRIVATE dm32core)
+add_test(NAME rf_channel COMMAND test_rf_channel)
+
+add_executable(test_c4fm_frontend test_c4fm_frontend.cpp)
+target_link_libraries(test_c4fm_frontend PRIVATE dm32core)
+add_test(NAME c4fm_frontend COMMAND test_c4fm_frontend)
+
+add_executable(test_fm_loopback test_fm_loopback.cpp)
+target_link_libraries(test_fm_loopback PRIVATE dm32core)
+add_test(NAME fm_loopback COMMAND test_fm_loopback)
 
 add_executable(test_modem test_modem.cpp)
 target_link_libraries(test_modem PRIVATE dm32core)

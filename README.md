@@ -242,7 +242,7 @@ src/hr_c7000_modem.cpp  HR_C7000 DMR registers, slot timing and virtual RF bridg
 src/elf.cpp        ELF32 loader and symbol reader
 src/firmware.cpp   shared .bin/.elf firmware loader
 src/codec_backup.cpp  backup ZIP/program-memory reader and codec slot builder
-src/virtual_rf.cpp  shared burst bus for two or more emulated radios
+src/rf_channel.cpp  mode-blind IQ channel shared by two or more emulated radios
 src/uart_bridge.cpp  UART0 to PTY/TCP bridge for the debug link and CPS tools
 src/gui/           Qt6 GUI: worker thread, radio widget, single and dual windows
 tests/             unit tests and opt-in firmware/codec integration tests

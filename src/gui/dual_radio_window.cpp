@@ -29,7 +29,7 @@ DualRadioWindow::DualRadioWindow(QWidget *parent) : QMainWindow(parent)
 	setWindowTitle(QStringLiteral("DM32EMU - Dual Radio"));
 	setMinimumSize(1100, 760);
 	resize(1500, 1000);
-	bus_ = std::make_shared<VirtualRfBus>();
+	iq_ = std::make_shared<VirtualRfIqChannel>();
 
 	QDir docs(QDir::homePath() + QStringLiteral("/Documents"));
 	const QStringList backups = docs.entryList({QStringLiteral("DM32UV_Backup_*.zip")}, QDir::Files, QDir::Time);
@@ -68,16 +68,15 @@ void DualRadioWindow::buildUi()
 	linkToggle_ = new QCheckBox(QStringLiteral("Virtual RF link"), shared);
 	linkToggle_->setChecked(true);
 	tsCombo_ = new QComboBox(shared);
-	tsCombo_->addItem(QStringLiteral("TS1"), 1);
-	tsCombo_->addItem(QStringLiteral("TS2"), 2);
-	bus_->set_timeslot(1);
+	tsCombo_->addItem(QStringLiteral("DMR TS auto"), 0);
+	tsCombo_->addItem(QStringLiteral("DMR TS1"), 1);
+	tsCombo_->addItem(QStringLiteral("DMR TS2"), 2);
 	linkStats_ = new QLabel(shared);
 	auto *clear = new QPushButton(QStringLiteral("Clear RF queue"), shared);
 	sharedRow->addWidget(codecLabel_, 1);
 	sharedRow->addWidget(codecButton);
 	sharedRow->addSpacing(16);
 	sharedRow->addWidget(linkToggle_);
-	sharedRow->addWidget(new QLabel(QStringLiteral("RF TS"), shared));
 	sharedRow->addWidget(tsCombo_);
 	sharedRow->addWidget(linkStats_);
 	sharedRow->addWidget(clear);
@@ -91,8 +90,8 @@ void DualRadioWindow::buildUi()
 	radios->addWidget(panes_[1].box, 1);
 
 	auto *hint = new QLabel(QStringLiteral(
-		"Use a DMR channel on both radios (same timeslot and color code). "
-		"Select the matching RF timeslot above, then press PTT on either keypad."), central);
+		"Both radios share one IQ channel. Press PTT on either keypad; the "
+		"waveform is carried unchanged, so any mode can use the same link."), central);
 	hint->setWordWrap(true);
 	root->addWidget(hint);
 
@@ -100,13 +99,13 @@ void DualRadioWindow::buildUi()
 	statusBar()->showMessage(QStringLiteral("Open a firmware for each radio"));
 
 	connect(codecButton, &QPushButton::clicked, this, &DualRadioWindow::chooseCodec);
-	connect(clear, &QPushButton::clicked, this, [this] { bus_->clear(); updateLinkStats(); });
+	connect(clear, &QPushButton::clicked, this, [this] { iq_->clear(); updateLinkStats(); });
 	connect(tsCombo_, &QComboBox::currentIndexChanged, this, [this](int) {
-		bus_->set_timeslot((uint8_t)tsCombo_->currentData().toUInt());
-		updateLinkStats();
+		const uint8_t ts = (uint8_t)tsCombo_->currentData().toUInt();
+		for (auto &p : panes_) p.emu->setDmrTimeslot(ts);
 	});
 	connect(linkToggle_, &QCheckBox::toggled, this, [this](bool on) {
-		for (auto &p : panes_) p.emu->setVirtualRfEnabled(on);
+		for (auto &p : panes_) p.emu->setIqEnabled(on);
 		statusBar()->showMessage(on ? QStringLiteral("Virtual RF link on") : QStringLiteral("Virtual RF link off"), 3000);
 	});
 }
@@ -153,8 +152,9 @@ void DualRadioWindow::buildPane(int side)
 	layout->addWidget(p.radio, 1);
 
 	p.emu = new EmulatorThread(this);
-	p.emu->setVirtualRf(bus_, (uint8_t)side);
-	p.emu->setVirtualRfEnabled(linkToggle_->isChecked());
+	p.emu->setIqChannel(iq_, (uint8_t)side);
+	p.emu->setIqEnabled(linkToggle_->isChecked());
+	p.emu->setDmrTimeslot((uint8_t)tsCombo_->currentData().toUInt());
 	p.emu->setIdleSkip(true);
 
 	connect(fw, &QPushButton::clicked, this, [this, side] { openFirmware(side); });
@@ -193,7 +193,7 @@ void DualRadioWindow::loadSettings()
 	QSettings settings;
 	const QString codec = settings.value(QStringLiteral("dual/codec")).toString();
 	if (!codec.isEmpty() && QFileInfo::exists(codec)) codecBackup_ = codec;
-	tsCombo_->setCurrentIndex(settings.value(QStringLiteral("dual/ts"), 1).toInt() == 2 ? 1 : 0);
+	tsCombo_->setCurrentIndex(settings.value(QStringLiteral("dual/ts"), 0).toInt());
 	linkToggle_->setChecked(settings.value(QStringLiteral("dual/link"), true).toBool());
 	for (int i = 0; i < 2; i++) {
 		Pane &p = panes_[i];
@@ -329,7 +329,8 @@ void DualRadioWindow::reload(int side)
 						  QStringLiteral(" load failed"), error);
 		return;
 	}
-	p.emu->setVirtualRfEnabled(linkToggle_->isChecked());
+	p.emu->setIqEnabled(linkToggle_->isChecked());
+	p.emu->setDmrTimeslot((uint8_t)tsCombo_->currentData().toUInt());
 	p.emu->start();
 	p.status->setText(QStringLiteral("running"));
 	statusBar()->showMessage((side == 0 ? QStringLiteral("Radio A: ") : QStringLiteral("Radio B: ")) +
@@ -345,8 +346,8 @@ void DualRadioWindow::reloadAll()
 
 void DualRadioWindow::updateLinkStats()
 {
-	linkStats_->setText(QStringLiteral("RF %1/%2/%3 TS%4")
-		.arg(bus_->sent()).arg(bus_->delivered()).arg(bus_->dropped()).arg(bus_->timeslot() ? bus_->timeslot() : 0));
+	linkStats_->setText(QStringLiteral("IQ %1 sent / %2 received / %3 dropped")
+		.arg(iq_->transmitted_samples()).arg(iq_->delivered_samples()).arg(iq_->dropped_blocks()));
 }
 
 void DualRadioWindow::closeEvent(QCloseEvent *event)

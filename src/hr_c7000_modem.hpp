@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Sarah Rose
 #pragma once
 
-#include "virtual_rf.hpp"
+#include "dmr_burst.hpp"
 
 #include <array>
 #include <cstdint>
@@ -24,13 +24,21 @@ public:
 	void write(uint32_t off, uint32_t value, uint32_t size, uint64_t apb_cycles);
 	void tick(uint64_t apb_cycles);
 
-	void attach_virtual_rf(std::shared_ptr<VirtualRfBus> bus, uint8_t id);
-	void set_virtual_rf_enabled(bool on) { rf_enabled_ = on; }
-	bool virtual_rf_enabled() const { return rf_enabled_; }
+	using BurstSink = std::function<void(const DmrBurst &)>;
+	void set_burst_sink(BurstSink sink) { burst_sink_ = std::move(sink); }
+	void set_timeslot(uint8_t ts) { ts_override_ = (ts == 1 || ts == 2) ? ts : 0; }
+	void inject_burst(const DmrBurst &burst);
+
+	using PhySink = std::function<void(const uint8_t *, size_t)>;
+	void set_phy_block_sink(PhySink sink) { phy_sink_ = std::move(sink); }
+	void inject_discriminator_samples(const int16_t *samples, size_t count);
+	bool pcm_mic_enabled() const { return (audio_control_ & (1u << 4)) != 0; }
 
 private:
-	void capture_tx();
+	void capture_tx(uint64_t apb_cycles);
+	void capture_phy(uint64_t apb_cycles);
 	void inject_rx();
+	void emit_fm_half();
 
 	std::vector<uint8_t> &ram_;
 	IrqFn irq_;
@@ -47,8 +55,14 @@ private:
 	uint64_t slot_next_apb_ = 0;
 	uint64_t deframe_due_apb_ = 0;
 	bool deframe_pending_ = false;
-	VirtualRfBurst rx_burst_{};
-	std::shared_ptr<VirtualRfBus> rf_bus_;
-	uint8_t rf_id_ = 0;
-	bool rf_enabled_ = false;
+	DmrBurst rx_burst_{};
+	BurstSink burst_sink_;
+	PhySink phy_sink_;
+	uint32_t audio_control_ = 0;
+	uint8_t ts_override_ = 0;
+	uint8_t fm_addr_sw_ = 0;
+	uint8_t fm_half_ = 0;
+	uint8_t tx_half_ = 0;
+	uint64_t fm_half_next_apb_ = 0;
+	std::vector<int16_t> fm_samples_;
 };

@@ -55,10 +55,11 @@ bool EmulatorThread::loadFirmware(const QString &path, const QString &dataBackup
 			return false;
 		}
 	}
-	if (virtual_bus_) {
-		machine->attach_virtual_rf(virtual_bus_, virtual_id_);
-		machine->set_virtual_rf_enabled(virtual_enabled_.load());
-		virtual_applied_ = virtual_enabled_.load();
+	if (iq_channel_) {
+		machine->attach_iq_channel(iq_channel_, iq_id_);
+		machine->set_iq_enabled(iq_enabled_.load());
+		machine->set_dmr_timeslot(dmr_ts_.load());
+		iq_applied_ = iq_enabled_.load();
 	}
 	auto cpu = std::make_unique<Cpu>(*machine);
 	cpu->reset(info.entry);
@@ -390,9 +391,9 @@ void EmulatorThread::run()
 	};
 
 	while (!stop_.load()) {
-		if (virtual_bus_ && virtual_enabled_.load() != virtual_applied_) {
-			virtual_applied_ = virtual_enabled_.load();
-			machine_->set_virtual_rf_enabled(virtual_applied_);
+		if (iq_channel_ && iq_enabled_.load() != iq_applied_) {
+			iq_applied_ = iq_enabled_.load();
+			machine_->set_iq_enabled(iq_applied_);
 		}
 		const bool want_idle = idle_skip_enabled_.load();
 		if (want_idle != idle_skip_applied_) {

@@ -7,10 +7,13 @@
 namespace {
 
 constexpr uint32_t WORK_MODE_DMR = 0x6Eu;
-constexpr uint32_t WORK_MODE_DMR_PHY = 0x22u;
+constexpr uint32_t WORK_MODE_PHY = 0x22u;
+constexpr uint32_t WORK_MODE_PHY_CONT = 0x02u;
+constexpr uint32_t WORK_MODE_FM = 0x80u;
 constexpr uint64_t APB_HZ = 84000000ull;
 constexpr uint64_t SLOT_APB = APB_HZ * 30ull / 1000ull;
 constexpr uint64_t DEFRAME_APB = 168000ull;
+constexpr uint64_t FM_HALF_APB = APB_HZ * 32ull / 1000ull;
 
 uint8_t gf_mul8(uint8_t a, uint8_t b)
 {
@@ -37,16 +40,14 @@ void rs129_parity(const uint8_t data[9], uint8_t parity[3])
 	parity[2] = r0;
 }
 
-bool dmr_mode(uint32_t mode) { return mode == WORK_MODE_DMR || mode == WORK_MODE_DMR_PHY; }
+bool dmr_mode(uint32_t mode) { return mode == WORK_MODE_DMR; }
+bool phy_mode(uint32_t mode) { return mode == WORK_MODE_PHY || mode == WORK_MODE_PHY_CONT; }
 
 } // namespace
 
 HrC7000Modem::HrC7000Modem(std::vector<uint8_t> &ram, IrqFn irq) : ram_(ram), irq_(std::move(irq)) {}
 
-HrC7000Modem::~HrC7000Modem()
-{
-	if (rf_bus_) rf_bus_->remove_receiver(rf_id_);
-}
+HrC7000Modem::~HrC7000Modem() = default;
 
 void HrC7000Modem::reset()
 {
@@ -64,6 +65,12 @@ void HrC7000Modem::reset()
 	deframe_due_apb_ = 0;
 	deframe_pending_ = false;
 	rx_burst_ = {};
+	audio_control_ = 0;
+	fm_addr_sw_ = 0;
+	fm_half_ = 0;
+	tx_half_ = 0;
+	fm_half_next_apb_ = 0;
+	fm_samples_.clear();
 }
 
 uint32_t HrC7000Modem::read(uint32_t off, uint32_t size) const
@@ -80,12 +87,15 @@ uint32_t HrC7000Modem::read(uint32_t off, uint32_t size) const
 	case 0x41C: return layer2_status_;
 	default: break;
 	}
+	if (off == 0x080u) return audio_control_;
+	if (off == 0x56Cu) return fm_addr_sw_;
 	if (off < 0x100u || off >= 0x600u) return 0;
 	return regs_[(off - 0x100u) / 4u];
 }
 
 void HrC7000Modem::write(uint32_t off, uint32_t value, uint32_t size, uint64_t apb_cycles)
 {
+	if (off == 0x080u) { audio_control_ = value; return; }
 	if (off < 0x100u || off >= 0x600u) return;
 	if (size != 4) {
 		const uint32_t idx = (off - 0x100u) / 4u;
@@ -97,7 +107,7 @@ void HrC7000Modem::write(uint32_t off, uint32_t value, uint32_t size, uint64_t a
 	switch (off) {
 	case 0x100: {
 		work_mode_ = value;
-		const bool active = dmr_mode(value);
+		const bool active = dmr_mode(value) || phy_mode(value);
 		if (active && !slot_active_) {
 			slot_active_ = true;
 			slot_ts_ = 0;
@@ -117,23 +127,27 @@ void HrC7000Modem::write(uint32_t off, uint32_t value, uint32_t size, uint64_t a
 	case 0x3B0: break;
 	case 0x408:
 		regs_[(off - 0x100u) / 4u] = value;
-		if ((value & 0x80u) && !(value & 0x40u)) capture_tx();
+		if ((value & 0x80u) && !(value & 0x40u)) {
+			if (phy_mode(work_mode_)) capture_phy(apb_cycles);
+			else capture_tx(apb_cycles);
+		}
 		break;
 	case 0x418: send_type_ = value; break;
 	case 0x41C: break;
+	case 0x56C: fm_addr_sw_ = value; break;
 	default:
 		regs_[(off - 0x100u) / 4u] = value;
 		break;
 	}
 }
 
-void HrC7000Modem::capture_tx()
+void HrC7000Modem::capture_tx(uint64_t apb_cycles)
 {
+	(void)apb_cycles;
 	if (!dmr_mode(work_mode_)) return;
-	VirtualRfBurst b;
-	b.source = rf_id_;
+	DmrBurst b;
 	b.cc = (uint8_t)(local_cc_ & 0xFu);
-	b.ts = slot_ts_ == 0 ? 1 : slot_ts_;
+	b.ts = ts_override_ ? ts_override_ : (slot_ts_ == 0 ? 1 : slot_ts_);
 	const uint32_t st = send_type_;
 	if (st & 0x08u) {
 		b.kind = 0x10;
@@ -154,13 +168,44 @@ void HrC7000Modem::capture_tx()
 			b.payload[11] = (uint8_t)(p[2] ^ mask);
 		}
 	}
-	if (rf_enabled_ && rf_bus_) rf_bus_->send(b);
+	if (burst_sink_) burst_sink_(b);
 	irq_(32); // RF TX start: the driver keys the RF path and reports the slot
+}
+
+void HrC7000Modem::capture_phy(uint64_t apb_cycles)
+{
+	(void)apb_cycles;
+	if (!phy_sink_) return;
+	const uint8_t *block = ram_.data() + tx_half_ * 0x24u;
+	phy_sink_(block, 36);
+	tx_half_ ^= 1u;
+	irq_(32);
+}
+
+void HrC7000Modem::inject_discriminator_samples(const int16_t *samples, size_t count)
+{
+	fm_samples_.insert(fm_samples_.end(), samples, samples + count);
+}
+
+void HrC7000Modem::emit_fm_half()
+{
+	constexpr uint32_t off = 0x4E0u;
+	constexpr uint32_t n = 256u;
+	for (uint32_t i = 0; i < n; i++) {
+		const int16_t s = i < fm_samples_.size() ? fm_samples_[i] : 0;
+		ram_[off + (uint32_t)fm_half_ * n * 2u + i * 2u] = (uint8_t)((uint16_t)s >> 8);
+		ram_[off + (uint32_t)fm_half_ * n * 2u + i * 2u + 1u] = (uint8_t)s;
+	}
+	fm_samples_.erase(fm_samples_.begin(), fm_samples_.begin() + std::min<size_t>(n, fm_samples_.size()));
+	fm_addr_sw_ = (uint8_t)(fm_half_ + 1u);
+	fm_half_ ^= 1u;
+	sys_pending_ |= 1u << 14;
+	irq_(29);
 }
 
 void HrC7000Modem::inject_rx()
 {
-	VirtualRfBurst b = rx_burst_;
+	const DmrBurst b = rx_burst_;
 	const uint8_t ts = b.ts == 2 ? 2 : 1;
 	const uint32_t sync_family = ts == 2 ? 3u : 2u; // DMR_SYNC_TS2 / DMR_SYNC_TS1
 	uint32_t rti = (sync_family << 2) | 2u;
@@ -179,33 +224,26 @@ void HrC7000Modem::inject_rx()
 
 void HrC7000Modem::tick(uint64_t apb_cycles)
 {
+	if (!fm_samples_.empty() && fm_half_next_apb_ == 0) fm_half_next_apb_ = apb_cycles + FM_HALF_APB;
+	if (fm_half_next_apb_ != 0 && apb_cycles >= fm_half_next_apb_) {
+		emit_fm_half();
+		fm_half_next_apb_ += FM_HALF_APB;
+		if (fm_half_next_apb_ <= apb_cycles) fm_half_next_apb_ = apb_cycles + FM_HALF_APB;
+	}
 	if (!slot_active_) return;
 	if (apb_cycles >= slot_next_apb_) {
 		slot_ts_ = slot_ts_ == 1 ? 2 : 1;
 		layer2_status_ = slot_ts_ == 2 ? 0xC0000000u : 0u;
 		irq_(30);
 		irq_(31);
-		if (rf_enabled_ && rf_bus_ && !deframe_pending_ && (sys_pending_ & (1u << 3)) == 0) {
-			VirtualRfBurst b;
-			if (rf_bus_->receive(rf_id_, b)) {
-				rx_burst_ = b;
-				deframe_pending_ = true;
-				deframe_due_apb_ = apb_cycles + DEFRAME_APB;
-			}
-		}
 		slot_next_apb_ += SLOT_APB;
 		if (slot_next_apb_ <= apb_cycles) slot_next_apb_ = apb_cycles + SLOT_APB;
 	}
-	if (deframe_pending_ && apb_cycles >= deframe_due_apb_ && (sys_pending_ & (1u << 3)) == 0) {
-		deframe_pending_ = false;
-		inject_rx();
-	}
 }
 
-void HrC7000Modem::attach_virtual_rf(std::shared_ptr<VirtualRfBus> bus, uint8_t id)
+void HrC7000Modem::inject_burst(const DmrBurst &burst)
 {
-	if (rf_bus_) rf_bus_->remove_receiver(rf_id_);
-	rf_bus_ = std::move(bus);
-	rf_id_ = id;
-	if (rf_bus_) rf_bus_->add_receiver(id);
+	rx_burst_ = burst;
+	if (ts_override_) rx_burst_.ts = ts_override_;
+	inject_rx();
 }
